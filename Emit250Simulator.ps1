@@ -1,9 +1,17 @@
 [CmdletBinding()]
 param(
-    [string]$KilpDat = (Join-Path $PSScriptRoot "KILP.DAT"),
-    [string]$ClassesXml = (Join-Path $PSScriptRoot "KilpSrj.xml"),
-    [string]$CoursesXml = (Join-Path $PSScriptRoot "radat1.xml")
+    [string]$KilpDat,
+    [string]$ClassesXml,
+    [string]$CoursesXml
 )
+
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot }
+    elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+    else { Get-Location }
+
+if (-not $KilpDat) { $KilpDat = Join-Path $ScriptRoot "KILP.DAT" }
+if (-not $ClassesXml) { $ClassesXml = Join-Path $ScriptRoot "KilpSrj.xml" }
+if (-not $CoursesXml) { $CoursesXml = Join-Path $ScriptRoot "radat1.xml" }
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
