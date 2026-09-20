@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Emit 250 -lukijasimulaattori</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f3f5f8; color: #162033; }
+    main { width: min(1180px, calc(100% - 32px)); margin: 24px auto; }
+    h1 { margin: 0 0 6px; font-size: 1.65rem; }
+    .intro { margin: 0 0 20px; color: #536078; }
+    .card { background: #fff; border: 1px solid #dce1e9; border-radius: 12px; padding: 18px; margin-bottom: 16px; box-shadow: 0 2px 8px #1720330a; }
+    .files, .toolbar, .sendbar { display: grid; gap: 12px; align-items: end; }
+    .files { grid-template-columns: repeat(3, minmax(190px, 1fr)) auto; }
+    .toolbar { grid-template-columns: 120px minmax(220px, 1fr); margin-bottom: 14px; }
+    .sendbar { grid-template-columns: auto 150px auto auto auto 110px 1fr; }
+    label { display: grid; gap: 6px; font-weight: 650; font-size: .9rem; }
+    input, select, button { font: inherit; }
+    input[type=file], input[type=search], input[type=number], select { width: 100%; min-height: 40px; border: 1px solid #bdc6d5; border-radius: 7px; background: #fff; padding: 8px 10px; }
+    button { min-height: 40px; border: 0; border-radius: 7px; padding: 9px 16px; background: #135fca; color: #fff; font-weight: 700; cursor: pointer; }
+    button.secondary { background: #e6ebf3; color: #162033; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .check { display: flex; align-items: center; gap: 8px; min-height: 40px; }
+    .table-wrap { overflow: auto; max-height: 55vh; border: 1px solid #dce1e9; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+    th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid #e7eaf0; }
+    th { position: sticky; top: 0; background: #eef2f7; z-index: 1; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #f2f6fc; }
+    tbody tr.selected { background: #dceaff; }
+    .status { min-height: 24px; margin: 12px 0 0; color: #42506a; }
+    .status.error { color: #ad1f2d; font-weight: 650; }
+    .status.success { color: #176b3a; font-weight: 650; }
+    .details { color: #536078; align-self: center; }
+    .notice { padding: 10px 12px; background: #fff4d7; border-radius: 7px; margin-bottom: 16px; display: none; }
+    .dropzone { border: 2px dashed #9aabc3; border-radius: 10px; padding: 18px; margin-bottom: 14px; text-align: center; color: #536078; background: #f8faff; transition: border-color .15s, background .15s, color .15s; }
+    .dropzone strong { display: block; color: #162033; font-size: 1rem; margin-bottom: 4px; }
+    .dropzone.is-dragover { border-color: #135fca; background: #eaf2ff; color: #135fca; }
+    @media (max-width: 850px) {
+      .files, .sendbar { grid-template-columns: 1fr; }
+      .toolbar { grid-template-columns: 100px 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Emit 250 -lukijasimulaattori</h1>
+    <p class="intro">Lue Pirilä-kilpailutiedostot, valitse kilpailija ja lähetä simuloitu kortinluku Web Serial -yhteydellä.</p>
+    <div id="browserNotice" class="notice">Web Serial ei ole käytettävissä. Avaa sivu Chromella tai Edgellä osoitteesta <strong>http://localhost</strong> tai HTTPS-osoitteesta.</div>
+
+    <section class="card">
+      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Pudota kolme kilpailutiedostoa tähän">
+        <strong>Raahaa ja pudota kolme kilpailutiedostoa tähän</strong>
+        <span>KILP.DAT, KilpSrj.xml ja radat1.xml tunnistetaan tiedostonimen perusteella.</span>
+      </div>
+      <div class="files">
+        <label>KILP.DAT<input id="kilpFile" type="file" accept=".dat"></label>
+        <label>KilpSrj.xml<input id="classesFile" type="file" accept=".xml,text/xml,application/xml"></label>
+        <label>radat1.xml<input id="coursesFile" type="file" accept=".xml,text/xml,application/xml"></label>
+        <button id="loadButton">Lataa tiedostot</button>
+      </div>
+      <p id="loadStatus" class="status">Valitse kaikki kolme kilpailutiedostoa.</p>
+    </section>
+
+    <section class="card">
+      <div class="toolbar">
+        <label>Vaihe<select id="race"><option value="1">1</option><option value="2">2</option></select></label>
+        <label>Haku<input id="search" type="search" placeholder="Nimi, numero, sarja, rata, Emit tai seura"></label>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Nro</th><th>Sukunimi</th><th>Etunimi</th><th>Sarja</th><th>Rata</th><th>Emit</th><th>Seura</th></tr></thead>
+          <tbody id="competitors"></tbody>
+        </table>
+      </div>
+      <p id="countStatus" class="status">0 kilpailijaa</p>
+    </section>
+
+    <section class="card">
+      <div class="sendbar">
+        <button id="connectButton" class="secondary">Valitse sarjaportti</button>
+        <label>Loppuaika (min)<input id="finishMinutes" type="number" min="1" max="1000" value="60"></label>
+        <label class="check"><input id="sendTwice" type="checkbox" checked> Lähetä kahdesti</label>
+        <button id="sendButton" disabled>Simuloi kortinluku</button>
+        <button id="saveButton" class="secondary" disabled>Tallenna paketti</button>
+        <label>Lähetysväli (s)<input id="allInterval" type="number" min="0.1" max="3600" step="0.1" value="1"></label>
+        <button id="allButton" disabled>Simuloi kaikki</button>
+        <button id="stopAllButton" class="secondary" disabled>Pysäytä</button>
+      </div>
+      <p id="selectionDetails" class="details">Valitse kilpailija.</p>
+      <p id="serialStatus" class="status">Sarjaporttia ei ole valittu.</p>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
