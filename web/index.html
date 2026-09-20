@@ -38,6 +38,13 @@
     .dropzone { border: 2px dashed #9aabc3; border-radius: 10px; padding: 18px; margin-bottom: 14px; text-align: center; color: #536078; background: #f8faff; transition: border-color .15s, background .15s, color .15s; }
     .dropzone strong { display: block; color: #162033; font-size: 1rem; margin-bottom: 4px; }
     .dropzone.is-dragover { border-color: #135fca; background: #eaf2ff; color: #135fca; }
+    .help { padding: 0; overflow: hidden; }
+    .help summary { padding: 15px 18px; cursor: pointer; font-weight: 700; color: #135fca; }
+    .help summary:hover { background: #f5f8fd; }
+    .help-content { padding: 0 18px 18px; color: #42506a; }
+    .help-content p { margin: 8px 0; }
+    .help-content ul { margin: 8px 0 0; padding-left: 22px; }
+    .help-content a { color: #135fca; }
     @media (max-width: 850px) {
       .files, .sendbar { grid-template-columns: 1fr; }
       .toolbar { grid-template-columns: 100px 1fr; }
@@ -49,6 +56,20 @@
     <h1>Emit 250 -lukijasimulaattori</h1>
     <p class="intro">Lue Pirilä-kilpailutiedostot, valitse kilpailija ja lähetä simuloitu kortinluku Web Serial -yhteydellä.</p>
     <div id="browserNotice" class="notice">Web Serial ei ole käytettävissä. Avaa sivu Chromella tai Edgellä osoitteesta <strong>http://localhost</strong> tai HTTPS-osoitteesta.</div>
+
+    <details class="card help">
+      <summary>Ohjeet: virtuaalinen sarjaportti ja Pirilän ohjelmat</summary>
+      <div class="help-content">
+        <p>Jos tietokoneessa ei ole fyysistä sarjaporttia, johon simulaattori voisi lähettää tietoja, asenna <strong>Null modem emulator</strong>. Sen avulla voit luoda kaksi toisiinsa yhdistettyä virtuaalista COM-porttia.</p>
+        <p>Luo esimerkiksi pari <strong>COM10 ↔ COM11</strong>. Valitse simulaattorille COM10 ja vastaanottavalle tulospalveluohjelmalle COM11. Porttiparin molemmat päät pitää avata eri ohjelmiin.</p>
+        <p>Asennus- ja latauslinkit:</p>
+        <ul>
+          <li><a href="https://github.com/PirilaTP/tulospalvelu" target="_blank" rel="noopener noreferrer">Pirilän tulospalveluohjelmat GitHubissa</a></li>
+          <li><a href="https://sourceforge.net/projects/com0com/" target="_blank" rel="noopener noreferrer">Null modem emulator (com0com) SourceForgessa</a></li>
+        </ul>
+        <p>Käytä asetuksia 9600 baudia, 8 databittiä, ei pariteettia ja 2 stop-bittiä.</p>
+      </div>
+    </details>
 
     <section class="card">
       <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Pudota kolme kilpailutiedostoa tähän">
