@@ -1,0 +1,12 @@
+services:
+  irma-api:
+    build: .
+    container_name: emit250-irma-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      PORT: 3000
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-https://ikivela.github.io}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-300}
+      NODE_ENV: production

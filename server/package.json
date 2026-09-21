@@ -1,0 +1,19 @@
+{
+  "name": "emit250-irma-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only IRMA proxy for the Emit 250 browser simulator",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/irma.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "express": "^5.1.0"
+  }
+}
