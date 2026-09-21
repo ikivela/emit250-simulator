@@ -14,8 +14,10 @@
     .card { background: #fff; border: 1px solid #dce1e9; border-radius: 12px; padding: 18px; margin-bottom: 16px; box-shadow: 0 2px 8px #1720330a; }
     .files, .toolbar, .sendbar { display: grid; gap: 12px; align-items: end; }
     .files { grid-template-columns: repeat(3, minmax(190px, 1fr)) auto; }
+    .files.replay-files { grid-template-columns: minmax(220px, 1fr) auto; }
     .toolbar { grid-template-columns: 120px minmax(220px, 1fr); margin-bottom: 14px; }
     .sendbar { grid-template-columns: auto 150px auto auto auto 110px 1fr; }
+    .sendbar.replay-bar { grid-template-columns: 170px auto auto 1fr; }
     label { display: grid; gap: 6px; font-weight: 650; font-size: .9rem; }
     input, select, button { font: inherit; }
     input[type=file], input[type=search], input[type=number], select { width: 100%; min-height: 40px; border: 1px solid #bdc6d5; border-radius: 7px; background: #fff; padding: 8px 10px; }
@@ -68,13 +70,14 @@
           <li><a href="https://sourceforge.net/projects/com0com/" target="_blank" rel="noopener noreferrer">Null modem emulator (com0com) SourceForgessa</a></li>
         </ul>
         <p>Käytä asetuksia 9600 baudia, 8 databittiä, ei pariteettia ja 2 stop-bittiä.</p>
+        <p><strong>Kisan uusinta (EMIT.DAT):</strong> lataa aiemman kisan alkuperäinen EMIT.DAT-leimaustiedosto omaan kenttäänsä kilpailijataulukon alla ja paina <em>Lataa EMIT.DAT</em>. Kilpailijat lähetetään maaliintuloaikojen mukaisessa järjestyksessä oikeilla leimausajoilla, ja koko kisa pakataan annettuun uusinnan kestoon suhteelliset välit säilyttäen.</p>
       </div>
     </details>
 
     <section class="card">
-      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Pudota kolme kilpailutiedostoa tähän">
-        <strong>Raahaa ja pudota kolme kilpailutiedostoa tähän</strong>
-        <span>KILP.DAT, KilpSrj.xml ja radat1.xml tunnistetaan tiedostonimen perusteella.</span>
+      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Pudota kilpailutiedostot tähän">
+        <strong>Raahaa ja pudota kilpailutiedostot tähän</strong>
+        <span>KILP.DAT, KilpSrj.xml, radat1.xml ja valinnainen EMIT.DAT tunnistetaan tiedostonimen perusteella.</span>
       </div>
       <div class="files">
         <label>KILP.DAT<input id="kilpFile" type="file" accept=".dat"></label>
@@ -97,6 +100,19 @@
         </table>
       </div>
       <p id="countStatus" class="status">0 kilpailijaa</p>
+    </section>
+
+    <section class="card">
+      <div class="files replay-files">
+        <label>EMIT.DAT (mennyt kisa)<input id="emitDatFile" type="file" accept=".dat"></label>
+        <button id="loadEmitButton" class="secondary">Lataa EMIT.DAT</button>
+      </div>
+      <p id="replayStatus" class="status">Lataa kilpailutiedostot ja EMIT.DAT uusintaa varten.</p>
+      <div class="sendbar replay-bar">
+        <label>Uusinnan kesto (min)<input id="replayMinutes" type="number" min="1" max="1000" value="5"></label>
+        <button id="startReplayButton" disabled>Aloita uusinta</button>
+        <button id="stopReplayButton" class="secondary" disabled>Pysäytä uusinta</button>
+      </div>
     </section>
 
     <section class="card">

@@ -2,7 +2,8 @@
 param(
     [string]$KilpDat,
     [string]$ClassesXml,
-    [string]$CoursesXml
+    [string]$CoursesXml,
+    [string]$EmitDat
 )
 
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot }
@@ -12,6 +13,7 @@ $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot }
 if (-not $KilpDat) { $KilpDat = Join-Path $ScriptRoot "KILP.DAT" }
 if (-not $ClassesXml) { $ClassesXml = Join-Path $ScriptRoot "KilpSrj.xml" }
 if (-not $CoursesXml) { $CoursesXml = Join-Path $ScriptRoot "radat1.xml" }
+if (-not $EmitDat) { $EmitDat = Join-Path $ScriptRoot "EMIT.DAT" }
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
@@ -125,13 +127,30 @@ function Read-KilpDat {
         [ValidateSet(1, 2)][int]$Race = 1
     )
 
-    $recordSize = 856
+    # A record is a 360-byte shared header followed by one 248-byte race
+    # phase block per race stage the event has: 608 bytes for a single-race
+    # event, 856 bytes when the event has two races (Race 1 and Race 2).
+    $headerSize = 360
+    $phaseSize = 248
     $bytes = [System.IO.File]::ReadAllBytes($Path)
-    if ($bytes.Length -lt ($recordSize * 2) -or ($bytes.Length % $recordSize) -ne 0) {
-        throw "Unsupported KILP.DAT size. Expected 856-byte records, got $($bytes.Length) bytes."
+
+    $stageCount = $null
+    foreach ($candidate in 1, 2) {
+        $candidateRecordSize = $headerSize + $phaseSize * $candidate
+        if ($bytes.Length -ge ($candidateRecordSize * 2) -and ($bytes.Length % $candidateRecordSize) -eq 0) {
+            $stageCount = $candidate
+            break
+        }
+    }
+    if ($null -eq $stageCount) {
+        throw "Unsupported KILP.DAT size. Expected $($headerSize + $phaseSize)-byte (single race) or $($headerSize + $phaseSize * 2)-byte (two races) records, got $($bytes.Length) bytes."
+    }
+    if ($Race -gt $stageCount) {
+        throw "This KILP.DAT file only contains data for race 1."
     }
 
-    $phaseOffset = if ($Race -eq 1) { 360 } else { 608 }
+    $recordSize = $headerSize + $phaseSize * $stageCount
+    $phaseOffset = $headerSize + $phaseSize * ($Race - 1)
     $result = New-Object System.Collections.Generic.List[object]
     $recordCount = [int]($bytes.Length / $recordSize)
 
@@ -160,7 +179,7 @@ function Read-KilpDat {
         $emitCard = [BitConverter]::ToInt32($bytes, $base + $phaseOffset + 68)
         if ($emitCard -le 0 -and $Race -eq 2) {
             # Some late registrations only contain the card in race 1.
-            $emitCard = [BitConverter]::ToInt32($bytes, $base + 360 + 68)
+            $emitCard = [BitConverter]::ToInt32($bytes, $base + $headerSize + 68)
         }
 
         [void]$result.Add([pscustomobject]@{
@@ -176,6 +195,46 @@ function Read-KilpDat {
             CourseName = $courseName
             Controls = $controls
             EmitCard = $emitCard
+        })
+    }
+
+    return $result.ToArray()
+}
+
+function Read-EmitDat {
+    param([string]$Path)
+
+    # Pirila's EMIT.DAT punch log: fixed 188-byte records. Offset 4 holds the
+    # Emit card number (UInt32 LE); offset 0x48 holds up to 48 UInt16 LE
+    # elapsed split times in seconds, zero-padded after the last real punch.
+    $recordSize = 188
+    $punchOffset = 0x48
+    $maxPunches = 48
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -eq 0 -or ($bytes.Length % $recordSize) -ne 0) {
+        throw "Unsupported EMIT.DAT size. Expected 188-byte records, got $($bytes.Length) bytes."
+    }
+
+    $result = New-Object System.Collections.Generic.List[object]
+    $recordCount = [int]($bytes.Length / $recordSize)
+
+    for ($recordIndex = 0; $recordIndex -lt $recordCount; $recordIndex++) {
+        $base = $recordIndex * $recordSize
+        $emitCard = [BitConverter]::ToUInt32($bytes, $base + 4)
+        if ($emitCard -le 0) { continue }
+
+        $times = New-Object System.Collections.Generic.List[int]
+        for ($p = 0; $p -lt $maxPunches; $p++) {
+            $seconds = [BitConverter]::ToUInt16($bytes, $base + $punchOffset + ($p * 2))
+            if ($seconds -eq 0) { break }
+            [void]$times.Add($seconds)
+        }
+        if ($times.Count -eq 0) { continue }
+
+        [void]$result.Add([pscustomobject]@{
+            EmitCard = [int]$emitCard
+            PunchSeconds = $times.ToArray()
         })
     }
 
@@ -207,7 +266,8 @@ function New-Emit250Packet {
     param(
         [int]$EmitCard,
         [int[]]$Controls,
-        [int]$FinishMinutes = 60
+        [int]$FinishMinutes = 60,
+        [int[]]$Times
     )
 
     if ($EmitCard -le 0 -or $EmitCard -gt 999999) {
@@ -222,6 +282,10 @@ function New-Emit250Packet {
         throw "Course has more than 49 controls; one slot is reserved for reader code 250."
     }
 
+    # Replay mode: reuse the real recorded split times instead of computing
+    # evenly spaced synthetic ones.
+    $useRealTimes = ($null -ne $Times) -and ($Times.Count -eq $routeControls.Count)
+
     $decoded = New-Object byte[] 217
     $decoded[0] = 0xFF
     $decoded[1] = 0xFF
@@ -234,11 +298,11 @@ function New-Emit250Packet {
     $decoded[8] = 0
     Set-ZeroSumByte $decoded 2 9
 
-    $finishSeconds = [Math]::Max(60, $FinishMinutes * 60)
+    $finishSeconds = if ($useRealTimes) { $Times[$Times.Count - 1] } else { [Math]::Max(60, $FinishMinutes * 60) }
     for ($i = 0; $i -lt $routeControls.Count; $i++) {
         $offset = 10 + ($i * 3)
         $decoded[$offset] = [byte]$routeControls[$i]
-        $seconds = [int][Math]::Round($finishSeconds * ($i + 1) / $routeControls.Count)
+        $seconds = if ($useRealTimes) { $Times[$i] } else { [int][Math]::Round($finishSeconds * ($i + 1) / $routeControls.Count) }
         $seconds = [Math]::Min(65534, [Math]::Max(1, $seconds))
         Set-UInt16LE $decoded ($offset + 1) $seconds
     }
@@ -313,21 +377,33 @@ function Send-Emit250Packet {
     }
 }
 
+function Wait-ReplayDelay {
+    param([double]$Seconds)
+    if ($Seconds -le 0) { return }
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ($script:ReplayRunning -and (Get-Date) -lt $deadline) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 50
+    }
+}
+
 $script:Classes = @{}
 $script:CourseData = $null
 $script:AllCompetitors = @()
 $script:VisibleCompetitors = @()
+$script:ReplayEntries = @()
+$script:ReplayRunning = $false
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Emit 250 Reader Simulator"
 $form.StartPosition = "CenterScreen"
-$form.Size = New-Object System.Drawing.Size(1060, 720)
-$form.MinimumSize = New-Object System.Drawing.Size(900, 600)
+$form.Size = New-Object System.Drawing.Size(1060, 900)
+$form.MinimumSize = New-Object System.Drawing.Size(900, 780)
 $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
 $filesGroup = New-Object System.Windows.Forms.GroupBox
 $filesGroup.Text = "Competition files"
-$filesGroup.SetBounds(12, 10, 1018, 118)
+$filesGroup.SetBounds(12, 10, 1018, 146)
 $filesGroup.Anchor = 'Top,Left,Right'
 $form.Controls.Add($filesGroup)
 
@@ -361,43 +437,44 @@ function Add-PathRow {
 $kilpBox = Add-PathRow "KILP.DAT" $KilpDat 22
 $classesBox = Add-PathRow "KilpSrj.xml" $ClassesXml 50
 $coursesBox = Add-PathRow "radat1.xml" $CoursesXml 78
+$emitDatBox = Add-PathRow "EMIT.DAT" $EmitDat 106
 
 $loadButton = New-Object System.Windows.Forms.Button
 $loadButton.Text = "Load files"
-$loadButton.SetBounds(12, 136, 100, 30)
+$loadButton.SetBounds(12, 164, 100, 30)
 $form.Controls.Add($loadButton)
 
 $raceLabel = New-Object System.Windows.Forms.Label
 $raceLabel.Text = "Race:"
-$raceLabel.SetBounds(128, 143, 42, 22)
+$raceLabel.SetBounds(128, 171, 42, 22)
 $form.Controls.Add($raceLabel)
 
 $raceCombo = New-Object System.Windows.Forms.ComboBox
 $raceCombo.DropDownStyle = 'DropDownList'
 $raceCombo.Items.AddRange(@("1", "2"))
 $raceCombo.SelectedIndex = 0
-$raceCombo.SetBounds(170, 139, 54, 26)
+$raceCombo.SetBounds(170, 167, 54, 26)
 $form.Controls.Add($raceCombo)
 
 $searchLabel = New-Object System.Windows.Forms.Label
 $searchLabel.Text = "Search:"
-$searchLabel.SetBounds(244, 143, 52, 22)
+$searchLabel.SetBounds(244, 171, 52, 22)
 $form.Controls.Add($searchLabel)
 
 $searchBox = New-Object System.Windows.Forms.TextBox
-$searchBox.SetBounds(298, 139, 318, 26)
+$searchBox.SetBounds(298, 167, 318, 26)
 $searchBox.Anchor = 'Top,Left,Right'
 $form.Controls.Add($searchBox)
 
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Text = "Load competition files."
-$statusLabel.SetBounds(630, 143, 400, 22)
+$statusLabel.SetBounds(630, 171, 400, 22)
 $statusLabel.Anchor = 'Top,Right'
 $statusLabel.TextAlign = 'MiddleRight'
 $form.Controls.Add($statusLabel)
 
 $grid = New-Object System.Windows.Forms.DataGridView
-$grid.SetBounds(12, 176, 1018, 390)
+$grid.SetBounds(12, 204, 1018, 390)
 $grid.Anchor = 'Top,Bottom,Left,Right'
 $grid.ReadOnly = $true
 $grid.AllowUserToAddRows = $false
@@ -425,8 +502,49 @@ foreach ($columnInfo in @(
     [void]$grid.Columns.Add($column)
 }
 
+$replayGroup = New-Object System.Windows.Forms.GroupBox
+$replayGroup.Text = "Race replay (EMIT.DAT)"
+$replayGroup.SetBounds(12, 606, 1018, 132)
+$replayGroup.Anchor = 'Bottom,Left,Right'
+$form.Controls.Add($replayGroup)
+
+$loadEmitButton = New-Object System.Windows.Forms.Button
+$loadEmitButton.Text = "Load EMIT.DAT"
+$loadEmitButton.SetBounds(12, 24, 140, 28)
+$replayGroup.Controls.Add($loadEmitButton)
+
+$replayStatusLabel = New-Object System.Windows.Forms.Label
+$replayStatusLabel.Text = "Load competition files and EMIT.DAT to replay a past race."
+$replayStatusLabel.SetBounds(160, 28, 846, 22)
+$replayStatusLabel.Anchor = 'Top,Left,Right'
+$replayGroup.Controls.Add($replayStatusLabel)
+
+$replayMinutesLabel = New-Object System.Windows.Forms.Label
+$replayMinutesLabel.Text = "Replay duration (min):"
+$replayMinutesLabel.SetBounds(12, 64, 140, 22)
+$replayGroup.Controls.Add($replayMinutesLabel)
+
+$replayMinutesInput = New-Object System.Windows.Forms.NumericUpDown
+$replayMinutesInput.Minimum = 1
+$replayMinutesInput.Maximum = 1000
+$replayMinutesInput.Value = 5
+$replayMinutesInput.SetBounds(158, 60, 70, 26)
+$replayGroup.Controls.Add($replayMinutesInput)
+
+$startReplayButton = New-Object System.Windows.Forms.Button
+$startReplayButton.Text = "Start replay"
+$startReplayButton.Enabled = $false
+$startReplayButton.SetBounds(242, 58, 120, 30)
+$replayGroup.Controls.Add($startReplayButton)
+
+$stopReplayButton = New-Object System.Windows.Forms.Button
+$stopReplayButton.Text = "Stop replay"
+$stopReplayButton.Enabled = $false
+$stopReplayButton.SetBounds(368, 58, 110, 30)
+$replayGroup.Controls.Add($stopReplayButton)
+
 $sendPanel = New-Object System.Windows.Forms.Panel
-$sendPanel.SetBounds(12, 578, 1018, 88)
+$sendPanel.SetBounds(12, 750, 1018, 88)
 $sendPanel.Anchor = 'Bottom,Left,Right'
 $form.Controls.Add($sendPanel)
 
@@ -540,6 +658,11 @@ $loadButton.Add_Click({
         $script:CourseData = Read-CourseFile $coursesBox.Text
         $script:AllCompetitors = @(Read-KilpDat $kilpBox.Text $script:Classes $script:CourseData.Courses $script:CourseData.Assignments ([int]$raceCombo.SelectedItem))
         Refresh-Grid
+
+        # The competitor list changed, so any previously matched replay data is stale.
+        $script:ReplayEntries = @()
+        $startReplayButton.Enabled = $false
+        $replayStatusLabel.Text = "Load EMIT.DAT to replay this race."
     }
     catch { Show-Error $_.Exception }
 })
@@ -586,6 +709,103 @@ $saveButton.Add_Click({
         }
     }
     catch { Show-Error $_.Exception }
+})
+
+$loadEmitButton.Add_Click({
+    try {
+        if ($script:AllCompetitors.Count -eq 0) { throw "Load competition files first." }
+
+        $entries = Read-EmitDat $emitDatBox.Text
+        $replay = New-Object System.Collections.Generic.List[object]
+        $competitorsByCard = @{}
+        foreach ($competitor in $script:AllCompetitors) {
+            if ($competitor.EmitCard -gt 0 -and -not $competitorsByCard.ContainsKey($competitor.EmitCard)) {
+                $competitorsByCard[$competitor.EmitCard] = $competitor
+            }
+        }
+
+        foreach ($entry in $entries) {
+            $competitor = $competitorsByCard[$entry.EmitCard]
+            if ($null -eq $competitor -or $competitor.Controls.Count -eq 0) { continue }
+
+            # Only replay as many controls as we have both a course code and a real punch time for.
+            $count = [Math]::Min($competitor.Controls.Count, $entry.PunchSeconds.Count)
+            if ($count -eq 0) { continue }
+
+            [void]$replay.Add([pscustomobject]@{
+                Competitor = $competitor
+                Controls = @($competitor.Controls | Select-Object -First $count)
+                Times = @($entry.PunchSeconds | Select-Object -First $count)
+                FinishSeconds = $entry.PunchSeconds[$count - 1]
+            })
+        }
+
+        $script:ReplayEntries = @($replay | Sort-Object FinishSeconds)
+        $matched = $script:ReplayEntries.Count
+        $replayStatusLabel.Text = "$matched / $($entries.Count) EMIT.DAT punches matched to loaded competitors."
+        $startReplayButton.Enabled = ($matched -gt 0)
+    }
+    catch {
+        $script:ReplayEntries = @()
+        $startReplayButton.Enabled = $false
+        Show-Error $_.Exception
+    }
+})
+
+$startReplayButton.Add_Click({
+    $previousSendEnabled = $sendButton.Enabled
+    try {
+        if ($script:ReplayEntries.Count -eq 0) { throw "Load EMIT.DAT first." }
+        if (-not $portCombo.SelectedItem) { throw "Select a COM port." }
+
+        $totalSeconds = [double]$replayMinutesInput.Value * 60
+        $span = [double]($script:ReplayEntries[$script:ReplayEntries.Count - 1].FinishSeconds - $script:ReplayEntries[0].FinishSeconds)
+        $scale = if ($span -gt 0) { $totalSeconds / $span } else { 0 }
+
+        $script:ReplayRunning = $true
+        $startReplayButton.Enabled = $false
+        $stopReplayButton.Enabled = $true
+        $loadButton.Enabled = $false
+        $loadEmitButton.Enabled = $false
+        $sendButton.Enabled = $false
+
+        $previousFinish = $null
+        $sent = 0
+        foreach ($item in $script:ReplayEntries) {
+            if (-not $script:ReplayRunning) { break }
+            if ($null -ne $previousFinish) {
+                Wait-ReplayDelay (($item.FinishSeconds - $previousFinish) * $scale)
+            }
+            if (-not $script:ReplayRunning) { break }
+            $previousFinish = $item.FinishSeconds
+
+            $packet = New-Emit250Packet $item.Competitor.EmitCard $item.Controls 0 $item.Times
+            Test-Emit250Packet $packet
+            Send-Emit250Packet ([string]$portCombo.SelectedItem) $packet $twiceCheck.Checked
+            $sent++
+            $replayStatusLabel.Text = "Replay: $sent / $($script:ReplayEntries.Count) sent."
+        }
+
+        if ($sent -eq $script:ReplayEntries.Count) {
+            $replayStatusLabel.Text = "Replay complete: $sent / $($script:ReplayEntries.Count) sent."
+        }
+        else {
+            $replayStatusLabel.Text = "Replay stopped: $sent / $($script:ReplayEntries.Count) sent."
+        }
+    }
+    catch { Show-Error $_.Exception }
+    finally {
+        $script:ReplayRunning = $false
+        $startReplayButton.Enabled = ($script:ReplayEntries.Count -gt 0)
+        $stopReplayButton.Enabled = $false
+        $loadButton.Enabled = $true
+        $loadEmitButton.Enabled = $true
+        $sendButton.Enabled = $previousSendEnabled
+    }
+})
+
+$stopReplayButton.Add_Click({
+    $script:ReplayRunning = $false
 })
 
 $form.Add_Shown({

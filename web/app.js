@@ -1,6 +1,7 @@
 "use strict";
 
-const RECORD_SIZE = 856;
+const KILP_HEADER_SIZE = 360;
+const KILP_PHASE_SIZE = 248;
 const PACKET_SIZE = 217;
 const XOR_MASK = 0xdf;
 
@@ -13,7 +14,9 @@ const state = {
   visible: [],
   selected: null,
   port: null,
-  simulatingAll: false
+  simulatingAll: false,
+  replayEntries: [],
+  replaying: false
 };
 
 const el = id => document.getElementById(id);
@@ -98,11 +101,27 @@ function fixedUtf16(view, offset, characterCount) {
 }
 
 function parseKilpDat(buffer, classes, courses, assignments, race) {
-  if (buffer.byteLength < RECORD_SIZE * 2 || buffer.byteLength % RECORD_SIZE !== 0) {
-    throw new Error(`KILP.DAT: tiedostokoko ${buffer.byteLength} ei koostu 856 tavun tietueista.`);
+  // A record is a 360-byte shared header followed by one 248-byte race phase
+  // block per race stage the event has: 608 bytes for a single-race event,
+  // 856 bytes when the event has two races (Race 1 and Race 2).
+  let stageCount = null;
+  for (const candidate of [1, 2]) {
+    const candidateRecordSize = KILP_HEADER_SIZE + KILP_PHASE_SIZE * candidate;
+    if (buffer.byteLength >= candidateRecordSize * 2 && buffer.byteLength % candidateRecordSize === 0) {
+      stageCount = candidate;
+      break;
+    }
   }
+  if (stageCount === null) {
+    const single = KILP_HEADER_SIZE + KILP_PHASE_SIZE;
+    const double = KILP_HEADER_SIZE + KILP_PHASE_SIZE * 2;
+    throw new Error(`KILP.DAT: tiedostokoko ${buffer.byteLength} ei koostu ${single} tavun (yksi kilpailu) tai ${double} tavun (kaksi kilpailua) tietueista.`);
+  }
+  if (race > stageCount) throw new Error("Tämä KILP.DAT sisältää tietoja vain vaiheelle 1.");
+
+  const RECORD_SIZE = KILP_HEADER_SIZE + KILP_PHASE_SIZE * stageCount;
   const view = new DataView(buffer);
-  const phaseOffset = race === 1 ? 360 : 608;
+  const phaseOffset = KILP_HEADER_SIZE + KILP_PHASE_SIZE * (race - 1);
   const competitors = [];
 
   for (let recordIndex = 1; recordIndex < buffer.byteLength / RECORD_SIZE; recordIndex++) {
@@ -112,7 +131,7 @@ function parseKilpDat(buffer, classes, courses, assignments, race) {
     const className = classes.get(classIndex) ?? `#${classIndex}`;
     const courseName = assignments.get(className) ?? (courses.has(className) ? className : "");
     let emitCard = view.getInt32(base + phaseOffset + 68, true);
-    if (emitCard <= 0 && race === 2) emitCard = view.getInt32(base + 360 + 68, true);
+    if (emitCard <= 0 && race === 2) emitCard = view.getInt32(base + KILP_HEADER_SIZE + 68, true);
     competitors.push({
       recordIndex,
       number: view.getUint16(base + 2, true),
@@ -126,6 +145,61 @@ function parseKilpDat(buffer, classes, courses, assignments, race) {
     });
   }
   return competitors;
+}
+
+function parseEmitDat(buffer) {
+  // Pirila's EMIT.DAT punch log from a past race: fixed 188-byte records.
+  // Offset 4 holds the Emit card number (UInt32 LE); offset 0x48 holds up to
+  // 48 UInt16 LE elapsed split times in seconds, zero-padded after the last
+  // real punch.
+  const RECORD_SIZE = 188;
+  const PUNCH_OFFSET = 0x48;
+  const MAX_PUNCHES = 48;
+
+  if (buffer.byteLength === 0 || buffer.byteLength % RECORD_SIZE !== 0) {
+    throw new Error(`EMIT.DAT: tiedostokoko ${buffer.byteLength} ei koostu 188 tavun tietueista.`);
+  }
+
+  const view = new DataView(buffer);
+  const entries = [];
+  for (let recordIndex = 0; recordIndex < buffer.byteLength / RECORD_SIZE; recordIndex++) {
+    const base = recordIndex * RECORD_SIZE;
+    const emitCard = view.getUint32(base + 4, true);
+    if (emitCard <= 0) continue;
+
+    const punchSeconds = [];
+    for (let p = 0; p < MAX_PUNCHES; p++) {
+      const seconds = view.getUint16(base + PUNCH_OFFSET + p * 2, true);
+      if (seconds === 0) break;
+      punchSeconds.push(seconds);
+    }
+    if (!punchSeconds.length) continue;
+    entries.push({ emitCard, punchSeconds });
+  }
+  return entries;
+}
+
+function buildReplayEntries(emitEntries, competitors) {
+  const byCard = new Map();
+  for (const competitor of competitors) {
+    if (competitor.emitCard > 0 && !byCard.has(competitor.emitCard)) byCard.set(competitor.emitCard, competitor);
+  }
+
+  const replay = [];
+  for (const entry of emitEntries) {
+    const competitor = byCard.get(entry.emitCard);
+    if (!competitor || !competitor.controls.length) continue;
+    const count = Math.min(competitor.controls.length, entry.punchSeconds.length);
+    if (!count) continue;
+    replay.push({
+      competitor,
+      controls: competitor.controls.slice(0, count),
+      times: entry.punchSeconds.slice(0, count),
+      finishSeconds: entry.punchSeconds[count - 1]
+    });
+  }
+  replay.sort((a, b) => a.finishSeconds - b.finishSeconds);
+  return replay;
 }
 
 function setUInt16LE(buffer, offset, value) {
@@ -144,7 +218,7 @@ function setZeroSumByte(buffer, start, checksumOffset) {
   buffer[checksumOffset] = (-sum) & 0xff;
 }
 
-function makeEmit250Packet(emitCard, controls, finishMinutes, wrongPunch = false) {
+function makeEmit250Packet(emitCard, controls, finishMinutes, wrongPunch = false, times = null) {
   if (!Number.isInteger(emitCard) || emitCard < 1 || emitCard > 999999) throw new Error("Emit-numeron pitää olla välillä 1–999999.");
   const route = controls.filter(code => Number.isInteger(code) && code >= 1 && code <= 250);
   if (!route.length) throw new Error("Valitulla kilpailijalla ei ole rataleimoja.");
@@ -160,6 +234,10 @@ function makeEmit250Packet(emitCard, controls, finishMinutes, wrongPunch = false
     route[Math.max(0, route.length - 1)] = incorrect;
   }
 
+  // Uusinta (replay) mode: reuse the real recorded split times from
+  // EMIT.DAT instead of computing evenly spaced synthetic ones.
+  const useRealTimes = Array.isArray(times) && times.length === route.length;
+
   const decoded = new Uint8Array(PACKET_SIZE);
   decoded[0] = 0xff;
   decoded[1] = 0xff;
@@ -170,11 +248,13 @@ function makeEmit250Packet(emitCard, controls, finishMinutes, wrongPunch = false
   decoded[7] = new Date().getFullYear() % 100;
   setZeroSumByte(decoded, 2, 9);
 
-  const finishSeconds = Math.max(60, Math.round(finishMinutes * 60));
+  const finishSeconds = useRealTimes ? times[times.length - 1] : Math.max(60, Math.round(finishMinutes * 60));
   route.forEach((code, index) => {
     const offset = 10 + index * 3;
     decoded[offset] = code;
-    const seconds = Math.min(65534, Math.max(1, Math.round(finishSeconds * (index + 1) / route.length)));
+    const seconds = useRealTimes
+      ? Math.min(65534, Math.max(1, times[index]))
+      : Math.min(65534, Math.max(1, Math.round(finishSeconds * (index + 1) / route.length)));
     setUInt16LE(decoded, offset + 1, seconds);
   });
 
@@ -260,6 +340,11 @@ async function loadFiles() {
     el("selectionDetails").textContent = "Valitse kilpailija.";
     renderCompetitors();
     setStatus(el("loadStatus"), `${state.competitors.length} kilpailijaa ladattu. Ratoja ${state.courses.size}, sarjoja ${state.classes.size}.`, "success");
+
+    // The competitor list changed, so any previously matched replay data is stale.
+    state.replayEntries = [];
+    el("startReplayButton").disabled = true;
+    setStatus(el("replayStatus"), "Lataa EMIT.DAT uusintaa varten.");
   } catch (error) {
     setStatus(el("loadStatus"), error.message, "error");
   }
@@ -278,7 +363,8 @@ function identifyDroppedFiles(fileList) {
   return {
     kilp: byName.get("kilp.dat") || null,
     classes: byName.get("kilpsrj.xml") || null,
-    courses: byName.get("radat1.xml") || null
+    courses: byName.get("radat1.xml") || null,
+    emitDat: byName.get("emit.dat") || null
   };
 }
 
@@ -288,11 +374,22 @@ function handleDroppedFiles(fileList) {
   if (dropped.kilp) setFileInput("kilpFile", dropped.kilp); else missing.push("KILP.DAT");
   if (dropped.classes) setFileInput("classesFile", dropped.classes); else missing.push("KilpSrj.xml");
   if (dropped.courses) setFileInput("coursesFile", dropped.courses); else missing.push("radat1.xml");
-  if (missing.length) {
-    setStatus(el("loadStatus"), `Pudotetuista tiedostoista puuttuu: ${missing.join(", ")}.`, "error");
-    return;
+  if (dropped.emitDat) setFileInput("emitDatFile", dropped.emitDat);
+
+  // Only nag about the three main files when the drop actually looked like it
+  // was meant for them (or nothing was recognized at all). A lone EMIT.DAT
+  // drop shouldn't be reported as "missing" the other three.
+  const droppedAnyMainFile = Boolean(dropped.kilp || dropped.classes || dropped.courses);
+  if (droppedAnyMainFile || !dropped.emitDat) {
+    if (missing.length) {
+      setStatus(el("loadStatus"), `Pudotetuista tiedostoista puuttuu: ${missing.join(", ")}.`, "error");
+    } else {
+      setStatus(el("loadStatus"), "Kaikki kolme tiedostoa vastaanotettu. Lataa tiedot painamalla painiketta.");
+    }
   }
-  setStatus(el("loadStatus"), "Kaikki kolme tiedostoa vastaanotettu. Lataa tiedot painamalla painiketta.");
+  if (dropped.emitDat) {
+    setStatus(el("replayStatus"), "EMIT.DAT vastaanotettu. Paina Lataa EMIT.DAT.", "success");
+  }
 }
 
 async function selectPort() {
@@ -304,6 +401,7 @@ async function selectPort() {
     el("connectButton").textContent = "Vaihda sarjaportti";
     el("sendButton").disabled = !state.selected;
     el("allButton").disabled = !state.competitors.length;
+    el("startReplayButton").disabled = !state.replayEntries.length;
     setStatus(el("serialStatus"), "Sarjaportti avattu: 9600 baudia, 8N2.", "success");
   } catch (error) {
     if (error.name !== "NotFoundError") setStatus(el("serialStatus"), error.message, "error");
@@ -397,6 +495,89 @@ function stopSimulation() {
   state.simulatingAll = false;
 }
 
+async function loadEmitDat() {
+  try {
+    if (!state.competitors.length) throw new Error("Lataa kilpailutiedostot ensin.");
+    const file = el("emitDatFile").files[0];
+    if (!file) throw new Error("Valitse EMIT.DAT.");
+    const buffer = await file.arrayBuffer();
+    const emitEntries = parseEmitDat(buffer);
+    state.replayEntries = buildReplayEntries(emitEntries, state.competitors);
+    setStatus(el("replayStatus"), `${state.replayEntries.length} / ${emitEntries.length} EMIT.DAT-leimausta yhdistetty ladattuihin kilpailijoihin.`,
+      state.replayEntries.length ? "success" : "error");
+    el("startReplayButton").disabled = !state.replayEntries.length || !state.port;
+  } catch (error) {
+    state.replayEntries = [];
+    el("startReplayButton").disabled = true;
+    setStatus(el("replayStatus"), error.message, "error");
+  }
+}
+
+function setReplayControls(running) {
+  state.replaying = running;
+  el("startReplayButton").disabled = running || !state.port || !state.replayEntries.length;
+  el("stopReplayButton").disabled = !running;
+  el("loadEmitButton").disabled = running;
+  el("loadButton").disabled = running;
+  el("allButton").disabled = running || !state.port || !state.competitors.length;
+  el("sendButton").disabled = running || !state.selected || !state.port;
+  el("saveButton").disabled = running || !state.selected;
+  el("connectButton").disabled = running;
+}
+
+async function startReplay() {
+  if (state.replaying) return;
+  if (!state.port?.writable) {
+    setStatus(el("replayStatus"), "Valitse sarjaportti ensin.", "error");
+    return;
+  }
+  if (!state.replayEntries.length) {
+    setStatus(el("replayStatus"), "Lataa EMIT.DAT ensin.", "error");
+    return;
+  }
+  const totalMinutes = Number(el("replayMinutes").value);
+  if (!Number.isFinite(totalMinutes) || totalMinutes < 1 || totalMinutes > 1000) {
+    setStatus(el("replayStatus"), "Uusinnan keston pitää olla 1–1000 minuuttia.", "error");
+    return;
+  }
+
+  const entries = state.replayEntries;
+  const span = entries[entries.length - 1].finishSeconds - entries[0].finishSeconds;
+  const scale = span > 0 ? (totalMinutes * 60) / span : 0;
+
+  setReplayControls(true);
+  let sent = 0;
+  try {
+    let previousFinish = null;
+    for (const entry of entries) {
+      if (!state.replaying) break;
+      if (previousFinish !== null) {
+        const delayMs = (entry.finishSeconds - previousFinish) * scale * 1000;
+        if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+      if (!state.replaying) break;
+      previousFinish = entry.finishSeconds;
+
+      await writePacket(makeEmit250Packet(entry.competitor.emitCard, entry.controls, 0, false, entry.times));
+      sent++;
+      setStatus(el("replayStatus"), `Uusinta: ${sent} / ${entries.length} lähetetty.`);
+    }
+    if (sent === entries.length) {
+      setStatus(el("replayStatus"), `Uusinta valmis: ${sent} / ${entries.length} lähetetty.`, "success");
+    } else {
+      setStatus(el("replayStatus"), `Uusinta pysäytetty: ${sent} / ${entries.length} lähetetty.`);
+    }
+  } catch (error) {
+    setStatus(el("replayStatus"), `Uusinta keskeytyi (${sent} / ${entries.length}): ${error.message}`, "error");
+  } finally {
+    setReplayControls(false);
+  }
+}
+
+function stopReplay() {
+  state.replaying = false;
+}
+
 function savePacket() {
   try {
     const packet = selectedPacket();
@@ -420,6 +601,9 @@ el("sendButton").addEventListener("click", sendPacket);
 el("saveButton").addEventListener("click", savePacket);
 el("allButton").addEventListener("click", simulateAll);
 el("stopAllButton").addEventListener("click", stopSimulation);
+el("loadEmitButton").addEventListener("click", loadEmitDat);
+el("startReplayButton").addEventListener("click", startReplay);
+el("stopReplayButton").addEventListener("click", stopReplay);
 
 const dropzone = el("dropzone");
 

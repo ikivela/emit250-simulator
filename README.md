@@ -18,7 +18,8 @@ Vaihtoehtoiset tiedostopolut voi antaa myos komentoriviparametreilla:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\Emit250Simulator.ps1 `
     -KilpDat C:\data\KILP.DAT `
     -ClassesXml C:\data\KilpSrj.xml `
-    -CoursesXml C:\data\radat1.xml
+    -CoursesXml C:\data\radat1.xml `
+    -EmitDat C:\data\EMIT.DAT
 ```
 
 ## Kaytto
@@ -56,6 +57,18 @@ Sarjaporttiasetukset ovat:
 
 **Save packet...** tallentaa validoidun 217 tavun binaarisanoman `.bin`-tiedostoon lahettamatta sita COM-porttiin. Tata voi kayttaa vastaanottavan ohjelman tai protokollan testaamiseen.
 
+## Menneen kisan uusinta (EMIT.DAT)
+
+**Race replay (EMIT.DAT)** -osiolla voi toistaa aiemmin ajetun kisan aidoilla leimausajoilla sen sijaan etta ne keksitaan.
+
+1. Lataa kilpailun `KILP.DAT`, `KilpSrj.xml` ja `radat1.xml` tavalliseen tapaan.
+2. Valitse kyseisen kisan alkuperainen `EMIT.DAT`-leimaustiedosto ja paina **Load EMIT.DAT**. Tila kertoo, kuinka moni EMIT.DAT:n leimaus yhdistyi ladattuihin kilpailijoihin Emit-numeron perusteella.
+3. Valitse COM-portti, anna **Replay duration (min)** (koko uusinnan kokonaiskesto) ja paina **Start replay**.
+
+Kilpailijat lahetetaan maaliintuloaikojen mukaisessa jarjestyksessa, ja lahetysten valit skaalataan suhteessa alkuperaisiin valeihin niin, etta koko kisa mahtuu annettuun kestoon - jarjestys ja suhteelliset valit pysyvat aitoina. Jokaisen paketin rastikoodit ja leimausajat ovat EMIT.DAT:sta luettuja oikeita arvoja, ei tasavalisia keksittyja aikoja. **Stop replay** keskeyttaa toiston.
+
+EMIT.DAT on kiintomittaisia 188 tavun tietueita: Emit-numero (UInt32) offsetissa 4 ja jopa 48 leimausvalia sekunteina (UInt16, nollilla taytetty) offsetissa 0x48. Leimausten rastikoodit haetaan kilpailijan radalta samalla tavalla kuin muutenkin; jos kilpailijalla ja EMIT.DAT-tietueella on eri maara leimauksia, kaytetaan lyhyempaa maaraa.
+
 ## Tiedostomuoto ja rajaukset
 
 - Parseri tukee 856 tavun tietueisiin perustuvaa `KILP.DAT`-rakennetta. Tiedoston koon on oltava vahintaan kaksi tietuetta ja jaollinen 856:lla.
@@ -72,4 +85,5 @@ Sarjaporttiasetukset ovat:
 - `Start-Emit250Simulator.cmd` - kaynnistys Windowsissa
 - `KilpSrj.xml` ja `radat1.xml` - kilpailun luokka- ja ratatiedot
 - `KILP.DAT` - kilpailijoiden binaaritiedot; ei kuulu versionhallintaan
+- `EMIT.DAT` - valinnainen, aiemman kisan leimaustiedot menneen kisan uusintaa varten; ei kuulu versionhallintaan
 
