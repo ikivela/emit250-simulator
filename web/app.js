@@ -135,6 +135,7 @@ function parseKilpDat(buffer, classes, courses, assignments, race) {
     competitors.push({
       recordIndex,
       number: view.getUint16(base + 2, true),
+      leg: 0,
       lastName: fixedUtf16(view, base + 48, 25),
       firstName: fixedUtf16(view, base + 98, 25),
       club: fixedUtf16(view, base + 180, 32),
@@ -145,6 +146,75 @@ function parseKilpDat(buffer, classes, courses, assignments, race) {
     });
   }
   return competitors;
+}
+
+function parseRelayLegCount(text) {
+  // A relay (viestikilpailu) KilpSrj.xml declares Software/FileFormat/Legs;
+  // an individual-race file declares Software/FileFormat/Races instead.
+  const xml = parseXml(text, "KilpSrj.xml");
+  const fileFormat = xml.getElementsByTagNameNS("*", "FileFormat")[0];
+  const legsText = fileFormat ? childText(fileFormat, "Legs") : "";
+  const legs = Number(legsText);
+  return Number.isInteger(legs) && legs > 0 ? legs : null;
+}
+
+function nulTerminatedUtf8(bytes, offset) {
+  let end = offset;
+  while (end < bytes.length && bytes[end] !== 0) end++;
+  return new TextDecoder("utf-8").decode(bytes.subarray(offset, end)).trim();
+}
+
+function parseViestiKilpDat(buffer, courses, className, legCount) {
+  // Relay (viestikilpailu) KILP.DAT: one record per TEAM, not per runner.
+  // 138-byte shared header (team number Int32 LE @2, club name UTF-8 NUL
+  // terminated @8) followed by legCount x 202-byte leg blocks, each with:
+  // "LastName|FirstName" (UTF-8, NUL terminated) @0, course variant name
+  // (UTF-8, NUL terminated) @92, Emit card number (Int32 LE) @105.
+  const HEADER_SIZE = 138;
+  const LEG_SIZE = 202;
+  const LEG_NAME_OFFSET = 0;
+  const LEG_COURSE_OFFSET = 92;
+  const LEG_EMIT_CARD_OFFSET = 105;
+
+  const RECORD_SIZE = HEADER_SIZE + LEG_SIZE * legCount;
+  if (buffer.byteLength < RECORD_SIZE * 2 || buffer.byteLength % RECORD_SIZE !== 0) {
+    throw new Error(`KILP.DAT (viesti): tiedostokoko ${buffer.byteLength} ei koostu ${RECORD_SIZE} tavun tietueista (${legCount} osuutta).`);
+  }
+
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  const runners = [];
+
+  for (let recordIndex = 1; recordIndex < buffer.byteLength / RECORD_SIZE; recordIndex++) {
+    const base = recordIndex * RECORD_SIZE;
+    if (view.getInt16(base, true) !== 0) continue;
+
+    const teamNumber = view.getInt32(base + 2, true);
+    const club = nulTerminatedUtf8(bytes, base + 8);
+
+    for (let leg = 0; leg < legCount; leg++) {
+      const legBase = base + HEADER_SIZE + leg * LEG_SIZE;
+      const nameField = nulTerminatedUtf8(bytes, legBase + LEG_NAME_OFFSET);
+      const emitCard = view.getInt32(legBase + LEG_EMIT_CARD_OFFSET, true);
+      if (!nameField || emitCard <= 0) continue;
+
+      const courseName = nulTerminatedUtf8(bytes, legBase + LEG_COURSE_OFFSET);
+      const [lastNameRaw, firstNameRaw = ""] = nameField.split("|");
+      runners.push({
+        recordIndex,
+        number: teamNumber,
+        leg: leg + 1,
+        lastName: lastNameRaw.trim(),
+        firstName: firstNameRaw.trim(),
+        club,
+        className,
+        courseName,
+        controls: courses.get(courseName) || [],
+        emitCard
+      });
+    }
+  }
+  return runners;
 }
 
 function parseEmitDat(buffer) {
@@ -187,12 +257,19 @@ function buildReplayEntries(emitEntries, competitors) {
 
   const replay = [];
   for (const entry of emitEntries) {
-    const competitor = byCard.get(entry.emitCard);
+    // Some relay KILP.DAT exports store the Emit card number minus
+    // 1,000,000 (a legacy 6-digit field limit for newer card series). Only
+    // trust that correction when it actually resolves to a loaded competitor.
+    const competitor = byCard.get(entry.emitCard) ?? byCard.get(entry.emitCard - 1000000);
     if (!competitor || !competitor.controls.length) continue;
     const count = Math.min(competitor.controls.length, entry.punchSeconds.length);
     if (!count) continue;
     replay.push({
       competitor,
+      // Use the card number actually read from EMIT.DAT, not the
+      // competitor's (possibly truncated) KILP.DAT value, so the simulated
+      // packet always carries a real card number.
+      emitCard: entry.emitCard,
       controls: competitor.controls.slice(0, count),
       times: entry.punchSeconds.slice(0, count),
       finishSeconds: entry.punchSeconds[count - 1]
@@ -219,7 +296,7 @@ function setZeroSumByte(buffer, start, checksumOffset) {
 }
 
 function makeEmit250Packet(emitCard, controls, finishMinutes, wrongPunch = false, times = null) {
-  if (!Number.isInteger(emitCard) || emitCard < 1 || emitCard > 999999) throw new Error("Emit-numeron pitää olla välillä 1–999999.");
+  if (!Number.isInteger(emitCard) || emitCard < 1 || emitCard > 16777215) throw new Error("Emit-numeron pitää olla välillä 1–16777215 (3 tavun protokollakenttä).");
   const route = controls.filter(code => Number.isInteger(code) && code >= 1 && code <= 250);
   if (!route.length) throw new Error("Valitulla kilpailijalla ei ole rataleimoja.");
   if (route.length > 49) throw new Error("Radalla on yli 49 rastia; yksi paikka tarvitaan lukijakoodille 250.");
@@ -293,14 +370,14 @@ function setStatus(target, message, type = "") {
 
 function renderCompetitors() {
   const query = el("search").value.trim().toLocaleLowerCase("fi");
-  state.visible = state.competitors.filter(c => !query || [c.number, c.firstName, c.lastName, c.className, c.courseName, c.emitCard, c.club]
+  state.visible = state.competitors.filter(c => !query || [c.number, c.leg, c.firstName, c.lastName, c.className, c.courseName, c.emitCard, c.club]
     .join(" ").toLocaleLowerCase("fi").includes(query));
   const body = el("competitors");
   body.replaceChildren();
   for (const competitor of state.visible) {
     const row = document.createElement("tr");
     if (state.selected === competitor) row.classList.add("selected");
-    for (const value of [competitor.number, competitor.lastName, competitor.firstName, competitor.className, competitor.courseName, competitor.emitCard, competitor.club]) {
+    for (const value of [competitor.number, competitor.leg > 0 ? competitor.leg : "", competitor.lastName, competitor.firstName, competitor.className, competitor.courseName, competitor.emitCard, competitor.club]) {
       const cell = document.createElement("td");
       cell.textContent = value;
       row.append(cell);
@@ -313,7 +390,8 @@ function renderCompetitors() {
 
 function selectCompetitor(competitor) {
   state.selected = competitor;
-  el("selectionDetails").textContent = `${competitor.firstName} ${competitor.lastName} | ${competitor.className} | ${competitor.controls.length} rataleimaa | Emit ${competitor.emitCard}`;
+  const legInfo = competitor.leg > 0 ? ` | Osuus ${competitor.leg}` : "";
+  el("selectionDetails").textContent = `${competitor.firstName} ${competitor.lastName}${legInfo} | ${competitor.className} | ${competitor.controls.length} rataleimaa | Emit ${competitor.emitCard}`;
   el("sendButton").disabled = !state.port;
   el("saveButton").disabled = false;
   renderCompetitors();
@@ -331,7 +409,19 @@ async function loadFiles() {
     state.courses = courseData.courses;
     state.assignments = courseData.assignments;
     state.kilpBuffer = kilpBuffer;
-    state.competitors = parseKilpDat(kilpBuffer, state.classes, state.courses, state.assignments, Number(el("race").value));
+
+    const legCount = parseRelayLegCount(classText);
+    if (legCount) {
+      // Relay (viestikilpailu): KILP.DAT has one record per team, not per
+      // runner, so the Race 1/2 selector does not apply.
+      const className = state.classes.size === 1 ? [...state.classes.values()][0] : "Viesti";
+      state.competitors = parseViestiKilpDat(kilpBuffer, state.courses, className, legCount);
+      el("race").disabled = true;
+    } else {
+      el("race").disabled = false;
+      state.competitors = parseKilpDat(kilpBuffer, state.classes, state.courses, state.assignments, Number(el("race").value));
+    }
+
     state.selected = null;
     el("sendButton").disabled = true;
     el("saveButton").disabled = true;
@@ -339,7 +429,8 @@ async function loadFiles() {
     el("stopAllButton").disabled = true;
     el("selectionDetails").textContent = "Valitse kilpailija.";
     renderCompetitors();
-    setStatus(el("loadStatus"), `${state.competitors.length} kilpailijaa ladattu. Ratoja ${state.courses.size}, sarjoja ${state.classes.size}.`, "success");
+    const relayNote = legCount ? `Viesti, ${legCount} osuutta. ` : "";
+    setStatus(el("loadStatus"), `${relayNote}${state.competitors.length} kilpailijaa ladattu. Ratoja ${state.courses.size}, sarjoja ${state.classes.size}.`, "success");
 
     // The competitor list changed, so any previously matched replay data is stale.
     state.replayEntries = [];
@@ -363,7 +454,7 @@ function identifyDroppedFiles(fileList) {
   return {
     kilp: byName.get("kilp.dat") || null,
     classes: byName.get("kilpsrj.xml") || null,
-    courses: byName.get("radat1.xml") || null,
+    courses: byName.get("radat1.xml") || byName.get("radat.xml") || null,
     emitDat: byName.get("emit.dat") || null
   };
 }
@@ -558,7 +649,7 @@ async function startReplay() {
       if (!state.replaying) break;
       previousFinish = entry.finishSeconds;
 
-      await writePacket(makeEmit250Packet(entry.competitor.emitCard, entry.controls, 0, false, entry.times));
+      await writePacket(makeEmit250Packet(entry.emitCard, entry.controls, 0, false, entry.times));
       sent++;
       setStatus(el("replayStatus"), `Uusinta: ${sent} / ${entries.length} lähetetty.`);
     }

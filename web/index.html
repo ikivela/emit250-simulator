@@ -72,18 +72,19 @@
         </ul>
         <p>Käytä asetuksia 9600 baudia, 8 databittiä, ei pariteettia ja 2 stop-bittiä.</p>
         <p><strong>Kisan uusinta (EMIT.DAT):</strong> lataa aiemman kisan alkuperäinen EMIT.DAT-leimaustiedosto omaan kenttäänsä kilpailijataulukon alla ja paina <em>Lataa EMIT.DAT</em>. Kilpailijat lähetetään maaliintuloaikojen mukaisessa järjestyksessä oikeilla leimausajoilla, ja koko kisa pakataan annettuun uusinnan kestoon suhteelliset välit säilyttäen.</p>
+        <p><strong>Viestikilpailu:</strong> sivu tunnistaa viestin automaattisesti KilpSrj.xml:stä. Sarja-valitsin poistuu käytöstä ja taulukkoon ilmestyy Osuus-sarake — jokainen rivi on yhden joukkueen yhden osuuden juoksija.</p>
       </div>
     </details>
 
     <section class="card">
       <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Pudota kilpailutiedostot tähän">
         <strong>Raahaa ja pudota kilpailutiedostot tähän</strong>
-        <span>KILP.DAT, KilpSrj.xml, radat1.xml ja valinnainen EMIT.DAT tunnistetaan tiedostonimen perusteella.</span>
+        <span>KILP.DAT, KilpSrj.xml, radat1.xml (tai viestin radat.xml) ja valinnainen EMIT.DAT tunnistetaan tiedostonimen perusteella.</span>
       </div>
       <div class="files">
         <label>KILP.DAT<input id="kilpFile" type="file" accept=".dat"></label>
         <label>KilpSrj.xml<input id="classesFile" type="file" accept=".xml,text/xml,application/xml"></label>
-        <label>radat1.xml<input id="coursesFile" type="file" accept=".xml,text/xml,application/xml"></label>
+        <label>radat1.xml / radat.xml<input id="coursesFile" type="file" accept=".xml,text/xml,application/xml"></label>
         <button id="loadButton">Lataa tiedostot</button>
       </div>
       <p id="loadStatus" class="status">Valitse kaikki kolme kilpailutiedostoa.</p>
@@ -96,7 +97,7 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Nro</th><th>Sukunimi</th><th>Etunimi</th><th>Sarja</th><th>Rata</th><th>Emit</th><th>Seura</th></tr></thead>
+          <thead><tr><th>Nro</th><th>Osuus</th><th>Sukunimi</th><th>Etunimi</th><th>Sarja</th><th>Rata</th><th>Emit</th><th>Seura</th></tr></thead>
           <tbody id="competitors"></tbody>
         </table>
       </div>

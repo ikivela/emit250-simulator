@@ -42,6 +42,27 @@ function Read-ClassFile {
     return $classes
 }
 
+function Get-RelayLegCount {
+    param([string]$Path)
+
+    # A relay (viestikilpailu) KilpSrj.xml declares Software/FileFormat/Legs;
+    # an individual-race file declares Software/FileFormat/Races instead and
+    # has no Legs node at all, so this must not assume the node exists.
+    [xml]$xml = Get-Content -LiteralPath $Path -Raw
+    $legsNode = $xml.SelectSingleNode("//*[local-name()='FileFormat']/*[local-name()='Legs']")
+    if ($null -ne $legsNode -and $legsNode.InnerText -match '^\d+$' -and [int]$legsNode.InnerText -gt 0) {
+        return [int]$legsNode.InnerText
+    }
+    return $null
+}
+
+function Get-NulTerminatedUtf8String {
+    param([byte[]]$Bytes, [int]$Offset)
+    $end = [Array]::IndexOf($Bytes, [byte]0, $Offset)
+    if ($end -lt 0) { $end = $Bytes.Length }
+    return [System.Text.Encoding]::UTF8.GetString($Bytes, $Offset, $end - $Offset).Trim()
+}
+
 function Read-CourseFile {
     param([string]$Path)
 
@@ -185,6 +206,7 @@ function Read-KilpDat {
         [void]$result.Add([pscustomobject]@{
             RecordIndex = $recordIndex
             Number = [BitConverter]::ToUInt16($bytes, $base + 2)
+            Leg = 0
             LastName = Get-FixedUnicodeString $bytes ($base + 48) 25
             FirstName = Get-FixedUnicodeString $bytes ($base + 98) 25
             Club = Get-FixedUnicodeString $bytes ($base + 180) 32
@@ -196,6 +218,79 @@ function Read-KilpDat {
             Controls = $controls
             EmitCard = $emitCard
         })
+    }
+
+    return $result.ToArray()
+}
+
+function Read-ViestiKilpDat {
+    param(
+        [string]$Path,
+        [hashtable]$Courses,
+        [string]$ClassName,
+        [int]$LegCount
+    )
+
+    # Relay (viestikilpailu) KILP.DAT: one record per TEAM, not per runner.
+    # 138-byte shared header (team number Int32 LE @2, club name UTF-8 NUL
+    # terminated @8) followed by $LegCount x 202-byte leg blocks, each with:
+    # "LastName|FirstName" (UTF-8, NUL terminated) @0, course variant name
+    # (UTF-8, NUL terminated) @92, Emit card number (Int32 LE) @105.
+    $headerSize = 138
+    $legSize = 202
+    $legNameOffset = 0
+    $legCourseOffset = 92
+    $legEmitCardOffset = 105
+
+    $recordSize = $headerSize + $legSize * $LegCount
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt ($recordSize * 2) -or ($bytes.Length % $recordSize) -ne 0) {
+        throw "Unsupported relay KILP.DAT size. Expected $recordSize-byte records ($LegCount legs), got $($bytes.Length) bytes."
+    }
+
+    $result = New-Object System.Collections.Generic.List[object]
+    $recordCount = [int]($bytes.Length / $recordSize)
+
+    for ($recordIndex = 1; $recordIndex -lt $recordCount; $recordIndex++) {
+        $base = $recordIndex * $recordSize
+        $status = [BitConverter]::ToInt16($bytes, $base)
+        if ($status -ne 0) { continue }
+
+        $teamNumber = [BitConverter]::ToInt32($bytes, $base + 2)
+        $club = Get-NulTerminatedUtf8String $bytes ($base + 8)
+
+        for ($leg = 0; $leg -lt $LegCount; $leg++) {
+            $legBase = $base + $headerSize + ($leg * $legSize)
+            $nameField = Get-NulTerminatedUtf8String $bytes ($legBase + $legNameOffset)
+            $emitCard = [BitConverter]::ToInt32($bytes, $legBase + $legEmitCardOffset)
+            if ([string]::IsNullOrEmpty($nameField) -or $emitCard -le 0) { continue }
+
+            $courseName = Get-NulTerminatedUtf8String $bytes ($legBase + $legCourseOffset)
+            $nameParts = $nameField.Split([char]'|', 2)
+            $lastName = $nameParts[0].Trim()
+            $firstName = if ($nameParts.Count -gt 1) { $nameParts[1].Trim() } else { "" }
+
+            $controls = @()
+            if ($courseName -and $Courses.ContainsKey($courseName)) {
+                $controls = @($Courses[$courseName])
+            }
+
+            [void]$result.Add([pscustomobject]@{
+                RecordIndex = $recordIndex
+                Number = $teamNumber
+                Leg = $leg + 1
+                LastName = $lastName
+                FirstName = $firstName
+                Club = $club
+                ClubShort = $club
+                Country = ""
+                ClassIndex = 0
+                ClassName = $ClassName
+                CourseName = $courseName
+                Controls = $controls
+                EmitCard = $emitCard
+            })
+        }
     }
 
     return $result.ToArray()
@@ -270,8 +365,8 @@ function New-Emit250Packet {
         [int[]]$Times
     )
 
-    if ($EmitCard -le 0 -or $EmitCard -gt 999999) {
-        throw "Emit card number must be between 1 and 999999."
+    if ($EmitCard -le 0 -or $EmitCard -gt 16777215) {
+        throw "Emit card number must be between 1 and 16777215 (3-byte protocol field)."
     }
 
     $routeControls = @($Controls | Where-Object { $_ -ge 1 -and $_ -le 250 })
@@ -488,6 +583,7 @@ $form.Controls.Add($grid)
 
 foreach ($columnInfo in @(
     @("Number", "No", 55),
+    @("Leg", "Leg", 45),
     @("LastName", "Last name", 130),
     @("FirstName", "First name", 110),
     @("ClassName", "Class", 65),
@@ -614,7 +710,7 @@ function Refresh-Grid {
     $filter = $searchBox.Text.Trim().ToLowerInvariant()
     if ($filter) {
         $script:VisibleCompetitors = @($script:AllCompetitors | Where-Object {
-            ("$($_.Number) $($_.FirstName) $($_.LastName) $($_.ClassName) $($_.CourseName) $($_.EmitCard) $($_.Club)").ToLowerInvariant().Contains($filter)
+            ("$($_.Number) $($_.Leg) $($_.FirstName) $($_.LastName) $($_.ClassName) $($_.CourseName) $($_.EmitCard) $($_.Club)").ToLowerInvariant().Contains($filter)
         })
     }
     else {
@@ -626,6 +722,7 @@ function Refresh-Grid {
         $row = New-Object System.Windows.Forms.DataGridViewRow
         $row.CreateCells($grid, [object[]]@(
             $competitor.Number,
+            $(if ($competitor.Leg -gt 0) { $competitor.Leg } else { "" }),
             $competitor.LastName,
             $competitor.FirstName,
             $competitor.ClassName,
@@ -656,8 +753,21 @@ $loadButton.Add_Click({
     try {
         $script:Classes = Read-ClassFile $classesBox.Text
         $script:CourseData = Read-CourseFile $coursesBox.Text
-        $script:AllCompetitors = @(Read-KilpDat $kilpBox.Text $script:Classes $script:CourseData.Courses $script:CourseData.Assignments ([int]$raceCombo.SelectedItem))
+        $legCount = Get-RelayLegCount $classesBox.Text
+
+        if ($legCount) {
+            # Relay (viestikilpailu): KILP.DAT has one record per team, not
+            # per runner, so the Race 1/2 selector does not apply.
+            $relayClassName = if ($script:Classes.Count -eq 1) { [string]($script:Classes.Values | Select-Object -First 1) } else { "Viesti" }
+            $script:AllCompetitors = @(Read-ViestiKilpDat $kilpBox.Text $script:CourseData.Courses $relayClassName $legCount)
+            $raceCombo.Enabled = $false
+        }
+        else {
+            $raceCombo.Enabled = $true
+            $script:AllCompetitors = @(Read-KilpDat $kilpBox.Text $script:Classes $script:CourseData.Courses $script:CourseData.Assignments ([int]$raceCombo.SelectedItem))
+        }
         Refresh-Grid
+        if ($legCount) { $statusLabel.Text = "Relay, $legCount legs. $($statusLabel.Text)" }
 
         # The competitor list changed, so any previously matched replay data is stale.
         $script:ReplayEntries = @()
@@ -676,7 +786,8 @@ $refreshPortsButton.Add_Click({ Refresh-Ports })
 $grid.Add_SelectionChanged({
     if ($grid.SelectedRows.Count -gt 0 -and $null -ne $grid.SelectedRows[0].Tag) {
         $c = $grid.SelectedRows[0].Tag
-        $detailsLabel.Text = "$($c.FirstName) $($c.LastName) | $($c.ClassName) | $($c.Controls.Count) course controls | Emit $($c.EmitCard)"
+        $legInfo = if ($c.Leg -gt 0) { " | Leg $($c.Leg)" } else { "" }
+        $detailsLabel.Text = "$($c.FirstName) $($c.LastName)$legInfo | $($c.ClassName) | $($c.Controls.Count) course controls | Emit $($c.EmitCard)"
     }
     else {
         $detailsLabel.Text = ""
@@ -726,6 +837,13 @@ $loadEmitButton.Add_Click({
 
         foreach ($entry in $entries) {
             $competitor = $competitorsByCard[$entry.EmitCard]
+            if ($null -eq $competitor) {
+                # Some relay KILP.DAT exports store the Emit card number minus
+                # 1,000,000 (a legacy 6-digit field limit for newer card
+                # series). Only trust that correction when it actually
+                # resolves to a loaded competitor.
+                $competitor = $competitorsByCard[$entry.EmitCard - 1000000]
+            }
             if ($null -eq $competitor -or $competitor.Controls.Count -eq 0) { continue }
 
             # Only replay as many controls as we have both a course code and a real punch time for.
@@ -734,6 +852,10 @@ $loadEmitButton.Add_Click({
 
             [void]$replay.Add([pscustomobject]@{
                 Competitor = $competitor
+                # Use the card number actually read from EMIT.DAT, not the
+                # competitor's (possibly truncated) KILP.DAT value, so the
+                # simulated packet always carries a real card number.
+                EmitCard = $entry.EmitCard
                 Controls = @($competitor.Controls | Select-Object -First $count)
                 Times = @($entry.PunchSeconds | Select-Object -First $count)
                 FinishSeconds = $entry.PunchSeconds[$count - 1]
@@ -779,7 +901,7 @@ $startReplayButton.Add_Click({
             if (-not $script:ReplayRunning) { break }
             $previousFinish = $item.FinishSeconds
 
-            $packet = New-Emit250Packet $item.Competitor.EmitCard $item.Controls 0 $item.Times
+            $packet = New-Emit250Packet $item.EmitCard $item.Controls 0 $item.Times
             Test-Emit250Packet $packet
             Send-Emit250Packet ([string]$portCombo.SelectedItem) $packet $twiceCheck.Checked
             $sent++

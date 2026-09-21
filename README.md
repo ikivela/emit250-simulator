@@ -10,8 +10,8 @@ Sovellus on julkaistu myos selaimessa ajettavana versiona osoitteessa:
 
 - Toimii Chromella tai Edgella (Web Serial API -tuki vaaditaan); sivu on tarjolla HTTPS:n yli, joten selainvaatimus tayttyy suoraan.
 - Ei vaadi PowerShellia tai asennusta - kaikki toiminta (tiedostojen luku, Emit 250 -sanoman muodostus, COM-porttiin lahetys) tapahtuu selaimessa.
-- Kilpailutiedostot (`KILP.DAT`, `KilpSrj.xml`, `radat1.xml`, valinnainen `EMIT.DAT`) voi raahata ja pudottaa suoraan sivulle, tai valita **Browse**-painikkeilla.
-- Sisaltaa samat toiminnot kuin PowerShell-versio: yksittaisen kilpailijan simulointi, **Simuloi kaikki**, testipaketin tallennus ja menneen kisan uusinta EMIT.DAT:sta.
+- Kilpailutiedostot (`KILP.DAT`, `KilpSrj.xml`, `radat1.xml`/`radat.xml`, valinnainen `EMIT.DAT`) voi raahata ja pudottaa suoraan sivulle, tai valita **Browse**-painikkeilla.
+- Sisaltaa samat toiminnot kuin PowerShell-versio: yksittaisen kilpailijan simulointi, **Simuloi kaikki**, testipaketin tallennus, menneen kisan uusinta EMIT.DAT:sta ja viestikilpailun tuki.
 - Sivun lahdekoodi on hakemistossa [`web/`](web/) ja se julkaistaan automaattisesti GitHub Actionsilla ([`.github/workflows/static.yml`](.github/workflows/static.yml)) aina kun `web/`-hakemistoon paivitetaan tiedostoja `main`-haaraan.
 - Virtuaalisen COM-portin tarve ja asetukset ovat samat kuin PowerShell-versiossa, katso [Virtuaalinen COM-portti](#virtuaalinen-com-portti) alla.
 
@@ -21,9 +21,10 @@ Sijoita kilpailun tiedostot samaan hakemistoon ohjelman kanssa:
 
 - `KILP.DAT`
 - `KilpSrj.xml`
-- `radat1.xml`
+- `radat1.xml` (yksilokilpailu) tai `radat.xml` (viestikilpailu, katso [Viestikilpailu](#viestikilpailu))
+- `EMIT.DAT` (valinnainen, menneen kisan uusintaa varten, katso [Menneen kisan uusinta](#menneen-kisan-uusinta-emitdat))
 
-Kaynnista `Start-Emit250Simulator.cmd`. Jos kaikki kolme tiedostoa loytyvat, ohjelma lataa ne automaattisesti. Tiedostopolut voi vaihtaa kayttoliittyman **Browse...**-painikkeilla.
+Kaynnista `Start-Emit250Simulator.cmd`. Jos ensimmaiset kolme tiedostoa loytyvat, ohjelma lataa ne automaattisesti. Tiedostopolut voi vaihtaa kayttoliittyman **Browse...**-painikkeilla.
 
 Vaihtoehtoiset tiedostopolut voi antaa myos komentoriviparametreilla:
 
@@ -37,7 +38,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\Emit250Simulator.
 
 ## Kaytto
 
-1. Valitse kilpailun vaihe (**Race** 1 tai 2) ja paina **Load files**.
+1. Valitse kilpailun vaihe (**Race** 1 tai 2) ja paina **Load files**. Viestikilpailussa **Race**-valitsin poistuu automaattisesti kaytosta, katso [Viestikilpailu](#viestikilpailu).
 2. Hae kilpailijaa numerolla, nimella, sarjalla, radalla, Emit-numerolla tai seuralla.
 3. Valitse kilpailija taulukosta.
 4. Paivita COM-portit **Refresh**-painikkeella ja valitse simulaattorin portti.
@@ -82,14 +83,27 @@ Kilpailijat lahetetaan maaliintuloaikojen mukaisessa jarjestyksessa, ja lahetyst
 
 EMIT.DAT on kiintomittaisia 188 tavun tietueita: Emit-numero (UInt32) offsetissa 4 ja jopa 48 leimausvalia sekunteina (UInt16, nollilla taytetty) offsetissa 0x48. Leimausten rastikoodit haetaan kilpailijan radalta samalla tavalla kuin muutenkin; jos kilpailijalla ja EMIT.DAT-tietueella on eri maara leimauksia, kaytetaan lyhyempaa maaraa.
 
+## Viestikilpailu
+
+Sovellus tunnistaa viestikilpailun (esim. Jukola/Venla-tyyppinen relay) automaattisesti `KilpSrj.xml`:sta eika vaadi erillista tilan valintaa:
+
+1. Lataa viestin `KILP.DAT`, `KilpSrj.xml` ja viestin ratatiedosto (tyypillisesti `radat.xml`) tavalliseen tapaan. **Race**-valitsin poistuu kaytosta, koska viestissa ei ole vaiheita vaan osuuksia.
+2. Kilpailijataulukkoon ilmestyy osuussarake (**Leg** PowerShell-versiossa, **Osuus** web-versiossa): jokainen rivi on yhden joukkueen yhden osuuden juoksija (Numero = joukkuenumero, Osuus = 1-N).
+3. Kaikki muut toiminnot (**Simulate card read**, **Simuloi kaikki**, testipaketin tallennus, EMIT.DAT-uusinta) toimivat rivikohtaisesti samalla tavalla kuin yksilokilpailussa.
+
+Viestin `KILP.DAT` on rakenteeltaan eri kuin yksilokilpailun: yksi tietue per joukkue (ei per kilpailija), 138 tavun yhteinen otsikko (joukkuenumero, seura) ja `LegCount` kappaletta 202 tavun osuuslohkoja. Kunkin osuuden lohko sisaltaa juoksijan nimen (`Sukunimi|Etunimi`, UTF-8), osuudelle arvotun radan nimen (esim. `V113`) ja Emit-numeron. Radat luetaan tavalliseen tapaan IOF-muotoisesta ratatiedostosta suoraan osuuden radan nimella, ei luokan kautta.
+
+**Huomio Emit-numeroista:** joissakin viestin `KILP.DAT`-vienneissa uudempien (1 000 000+) Emit-korttien numero on tallennettu 1 000 000 pienempana (vanha 6-numeroinen kenttarajoitus). Yksittaisen kilpailijan simulointi lahettaa `KILP.DAT`:sta luetun numeron sellaisenaan. EMIT.DAT-uusinnassa sovellus kokeilee molempia (luettu numero ja luettu numero + 1 000 000) ja kayttaa uusinnassa aina EMIT.DAT:sta luettua, todellista korttinumeroa.
+
 ## Tiedostomuoto ja rajaukset
 
-- Parseri tukee `KILP.DAT`-tietueita, joissa on 360 tavun yhteinen otsikko ja 248 tavua per kilpailun vaihe: 608 tavun tietueita yhden vaiheen kilpailulle, 856 tavun tietueita kun kilpailussa on kaksi vaihetta (Race 1 ja Race 2). Tietuekoko tunnistetaan automaattisesti tiedoston koosta.
-- `KilpSrj.xml` maarittelee luokkien indeksit. `radat1.xml` maarittelee radat ja leimauslaitteet.
-- Luokan ja radan yhdistys voidaan lukea kurssin `ClassShortName`-tiedoista tai erillisista `ClassCourseAssignment`-tiedoista.
+- Yksilokilpailun parseri tukee `KILP.DAT`-tietueita, joissa on 360 tavun yhteinen otsikko ja 248 tavua per kilpailun vaihe: 608 tavun tietueita yhden vaiheen kilpailulle, 856 tavun tietueita kun kilpailussa on kaksi vaihetta (Race 1 ja Race 2). Tietuekoko tunnistetaan automaattisesti tiedoston koosta.
+- Viestikilpailun `KILP.DAT`-tietuekoko on 138 + 202 x osuuksien maara, tunnistetaan `KilpSrj.xml`:n `Software/FileFormat/Legs`-arvosta (katso [Viestikilpailu](#viestikilpailu) yla).
+- `KilpSrj.xml` maarittelee luokkien indeksit (ja viestissa osuuksien maaran). Ratatiedosto (`radat1.xml` yksilokilpailussa, tyypillisesti `radat.xml` viestissa) maarittelee radat ja leimauslaitteet.
+- Luokan ja radan yhdistys voidaan lukea kurssin `ClassShortName`-tiedoista tai erillisista `ClassCourseAssignment`-tiedoista (yksilokilpailu); viestissa osuuden rata luetaan suoraan `KILP.DAT`:sta.
 - Vaiheen 2 puuttuvalle Emit-numerolle kaytetaan vaiheen 1 Emit-numeroa. Jos tiedostossa on vain yksi vaihe, Race 2 -valinta antaa selkean virheen.
 - Tavallisessa simuloinnissa leimausajat ovat tasaisesti kasvavia testiaikoja, eivat alkuperaisia kilpailutuloksia. Menneen kisan uusinnassa (katso yllaolevalta) leimausajat luetaan sen sijaan aidosta `EMIT.DAT`-tiedostosta.
-- Valitulla kilpailijalla taytyy olla 1-49 rataan kuuluvaa leimauslaitetta. Lukijakoodi 250 vie yhden paketin paikan.
+- Emit-numeron taytyy olla valilla 1-16 777 215 (paketin 3 tavun kentan koko). Valitulla kilpailijalla taytyy olla 1-49 rataan kuuluvaa leimauslaitetta. Lukijakoodi 250 vie yhden paketin paikan.
 - COM-portin taytyy olla olemassa (PowerShell-versio Windowsissa, web-versio kayttojarjestelman COM-porttilistalla) ennen lahetysta.
 
 ## Projektin tiedostot
@@ -98,7 +112,7 @@ EMIT.DAT on kiintomittaisia 188 tavun tietueita: Emit-numero (UInt32) offsetissa
 - `Start-Emit250Simulator.cmd` - kaynnistys Windowsissa
 - `web/` - selaimessa toimiva versio ([index.html](web/index.html), [app.js](web/app.js)), julkaistu GitHub Pagesiin osoitteessa [ikivela.github.io/emit250-simulator](https://ikivela.github.io/emit250-simulator/)
 - `.github/workflows/static.yml` - GitHub Actions -tyonkulku, joka julkaisee `web/`-hakemiston GitHub Pagesiin
-- `KilpSrj.xml` ja `radat1.xml` - kilpailun luokka- ja ratatiedot
-- `KILP.DAT` - kilpailijoiden binaaritiedot; ei kuulu versionhallintaan
+- `KilpSrj.xml` ja `radat1.xml`/`radat.xml` - kilpailun luokka- ja ratatiedot (`radat.xml` viestikilpailussa)
+- `KILP.DAT` - kilpailijoiden (tai viestissa joukkueiden) binaaritiedot; ei kuulu versionhallintaan
 - `EMIT.DAT` - valinnainen, aiemman kisan leimaustiedot menneen kisan uusintaa varten; ei kuulu versionhallintaan
 
