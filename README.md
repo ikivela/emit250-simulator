@@ -1,8 +1,21 @@
 # Emit 250 -lukijasilmulaattori
 
-Windows PowerShell 5.1 -sovellus, joka simuloi Emit 250 -lukijan kortinlukutapahtumia Windowsissa.
+Windows PowerShell 5.1 -sovellus, joka simuloi Emit 250 -lukijan kortinlukutapahtumia Windowsissa. Samat toiminnot loytyvat myos selaimessa toimivana web-sovelluksena.
 
-## Kaynnistaminen
+## Web-sovellus (GitHub Pages)
+
+Sovellus on julkaistu myos selaimessa ajettavana versiona osoitteessa:
+
+**[https://ikivela.github.io/emit250-simulator/](https://ikivela.github.io/emit250-simulator/)**
+
+- Toimii Chromella tai Edgella (Web Serial API -tuki vaaditaan); sivu on tarjolla HTTPS:n yli, joten selainvaatimus tayttyy suoraan.
+- Ei vaadi PowerShellia tai asennusta - kaikki toiminta (tiedostojen luku, Emit 250 -sanoman muodostus, COM-porttiin lahetys) tapahtuu selaimessa.
+- Kilpailutiedostot (`KILP.DAT`, `KilpSrj.xml`, `radat1.xml`, valinnainen `EMIT.DAT`) voi raahata ja pudottaa suoraan sivulle, tai valita **Browse**-painikkeilla.
+- Sisaltaa samat toiminnot kuin PowerShell-versio: yksittaisen kilpailijan simulointi, **Simuloi kaikki**, testipaketin tallennus ja menneen kisan uusinta EMIT.DAT:sta.
+- Sivun lahdekoodi on hakemistossa [`web/`](web/) ja se julkaistaan automaattisesti GitHub Actionsilla ([`.github/workflows/static.yml`](.github/workflows/static.yml)) aina kun `web/`-hakemistoon paivitetaan tiedostoja `main`-haaraan.
+- Virtuaalisen COM-portin tarve ja asetukset ovat samat kuin PowerShell-versiossa, katso [Virtuaalinen COM-portti](#virtuaalinen-com-portti) alla.
+
+## PowerShell-sovelluksen kaynnistaminen
 
 Sijoita kilpailun tiedostot samaan hakemistoon ohjelman kanssa:
 
@@ -71,18 +84,20 @@ EMIT.DAT on kiintomittaisia 188 tavun tietueita: Emit-numero (UInt32) offsetissa
 
 ## Tiedostomuoto ja rajaukset
 
-- Parseri tukee 856 tavun tietueisiin perustuvaa `KILP.DAT`-rakennetta. Tiedoston koon on oltava vahintaan kaksi tietuetta ja jaollinen 856:lla.
+- Parseri tukee `KILP.DAT`-tietueita, joissa on 360 tavun yhteinen otsikko ja 248 tavua per kilpailun vaihe: 608 tavun tietueita yhden vaiheen kilpailulle, 856 tavun tietueita kun kilpailussa on kaksi vaihetta (Race 1 ja Race 2). Tietuekoko tunnistetaan automaattisesti tiedoston koosta.
 - `KilpSrj.xml` maarittelee luokkien indeksit. `radat1.xml` maarittelee radat ja leimauslaitteet.
-- Luokan ja radan yhdistus voidaan lukea kurssin `ClassShortName`-tiedoista tai erillisista `ClassCourseAssignment`-tiedoista.
-- Vaiheen 2 puuttuvalle Emit-numerolle kaytetaan vaiheen 1 Emit-numeroa.
-- Simuloidut leimausajat ovat tasaisesti kasvavia testiaikoja, eivat alkuperaisia kilpailutuloksia.
+- Luokan ja radan yhdistys voidaan lukea kurssin `ClassShortName`-tiedoista tai erillisista `ClassCourseAssignment`-tiedoista.
+- Vaiheen 2 puuttuvalle Emit-numerolle kaytetaan vaiheen 1 Emit-numeroa. Jos tiedostossa on vain yksi vaihe, Race 2 -valinta antaa selkean virheen.
+- Tavallisessa simuloinnissa leimausajat ovat tasaisesti kasvavia testiaikoja, eivat alkuperaisia kilpailutuloksia. Menneen kisan uusinnassa (katso yllaolevalta) leimausajat luetaan sen sijaan aidosta `EMIT.DAT`-tiedostosta.
 - Valitulla kilpailijalla taytyy olla 1-49 rataan kuuluvaa leimauslaitetta. Lukijakoodi 250 vie yhden paketin paikan.
-- COM-portin taytyy olla olemassa Windowsissa ennen lahetysta.
+- COM-portin taytyy olla olemassa (PowerShell-versio Windowsissa, web-versio kayttojarjestelman COM-porttilistalla) ennen lahetysta.
 
 ## Projektin tiedostot
 
-- `Emit250Simulator.ps1` - kayttoliittyma, tiedostojen luku ja Emit 250 -sanoman muodostus
+- `Emit250Simulator.ps1` - PowerShell-kayttoliittyma, tiedostojen luku ja Emit 250 -sanoman muodostus
 - `Start-Emit250Simulator.cmd` - kaynnistys Windowsissa
+- `web/` - selaimessa toimiva versio ([index.html](web/index.html), [app.js](web/app.js)), julkaistu GitHub Pagesiin osoitteessa [ikivela.github.io/emit250-simulator](https://ikivela.github.io/emit250-simulator/)
+- `.github/workflows/static.yml` - GitHub Actions -tyonkulku, joka julkaisee `web/`-hakemiston GitHub Pagesiin
 - `KilpSrj.xml` ja `radat1.xml` - kilpailun luokka- ja ratatiedot
 - `KILP.DAT` - kilpailijoiden binaaritiedot; ei kuulu versionhallintaan
 - `EMIT.DAT` - valinnainen, aiemman kisan leimaustiedot menneen kisan uusintaa varten; ei kuulu versionhallintaan
