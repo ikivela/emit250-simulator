@@ -414,22 +414,34 @@ function logLine(text) {
   log.scrollTop = log.scrollHeight;
 }
 
-// Punches are clock times ending just before now; a real card also carries
-// the clear punch from the start box, which Pirila reads as the check time.
-function cardPlan(type, badge, punches) {
-  const clearSeconds = el("clearPunch").checked && punches.length ? secondsOfDay(punches[0].seconds - 120) : null;
-  return planForCard({ type, badge, punches, clearSeconds, dayOfWeek: new Date().getDay() });
+// Punches are clock times ending just before now. The start punch marks the
+// start the first split is measured from; without it Pirila falls back to
+// the clear punch (cleared 2 min before the start, as in a start box) or the
+// first control.
+function cardPlan(type, badge, { startSeconds, punches }) {
+  const withStart = el("startPunch").checked;
+  const clearSeconds = el("clearPunch").checked ? secondsOfDay(startSeconds - 120) : null;
+  const card = { type, badge, punches, startSeconds: withStart ? startSeconds : null, clearSeconds, dayOfWeek: new Date().getDay() };
+  return { card, plan: planForCard(card) };
+}
+
+function describeCard(card) {
+  const parts = [];
+  if (card.clearSeconds !== null) parts.push(`nollaus ${clockText(card.clearSeconds)}`);
+  if (card.startSeconds !== null) parts.push(`lähtö ${clockText(card.startSeconds)}`);
+  parts.push(...card.punches.map(p => `${p.code} ${clockText(p.seconds)}`));
+  return parts.join(", ");
 }
 
 function planForCompetitor(competitor, finishMinutes) {
   if (!Number.isInteger(competitor.emitCard) || competitor.emitCard < 1) throw new Error("Kortin numero puuttuu tai on virheellinen.");
   if (!competitor.controls.length) throw new Error("Valitulla kilpailijalla ei ole rataleimoja.");
   const type = selectedCardType(competitor);
-  return { type, plan: cardPlan(type, competitor.emitCard, evenPunches(competitor.controls, finishMinutes * 60, nowSecondsOfDay())) };
+  return { type, ...cardPlan(type, competitor.emitCard, evenPunches(competitor.controls, finishMinutes * 60, nowSecondsOfDay())) };
 }
 
-async function readOut(plan) {
-  logLine(`--- ${cardTypeLabel(plan.type)} ${plan.badge}`);
+async function readOut(card, plan) {
+  logLine(`--- ${cardTypeLabel(plan.type)} ${plan.badge}: ${describeCard(card)}`);
   return performCardRead(bytes => state.writer.write(bytes), state.queue, plan, { timeoutMs: responseTimeoutMs(), log: logLine });
 }
 
@@ -446,9 +458,9 @@ async function sendPacket() {
     if (!state.selected) throw new Error("Valitse kilpailija.");
     const minutes = Number(el("finishMinutes").value);
     if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1000) throw new Error("Loppuajan pitää olla 1–1000 minuuttia.");
-    const { type, plan } = planForCompetitor(state.selected, minutes);
+    const { type, card, plan } = planForCompetitor(state.selected, minutes);
     setStatus(el("serialStatus"), `${cardTypeLabel(type)}-kortti asetettu, odotetaan lukupyyntöjä...`);
-    setStatus(el("serialStatus"), ...readOutMessage(plan, await readOut(plan)));
+    setStatus(el("serialStatus"), ...readOutMessage(plan, await readOut(card, plan)));
   } catch (error) {
     setStatus(el("serialStatus"), error.message, "error");
   }
@@ -458,12 +470,12 @@ async function sendManualCard() {
   try {
     if (!state.writer) throw new Error("Valitse sarjaportti ensin.");
     const badge = parseManualBadge(el("manualBadge").value);
-    const punches = anchorPunches(parseManualPunches(el("manualPunches").value), nowSecondsOfDay());
+    const anchored = anchorPunches(parseManualPunches(el("manualPunches").value), nowSecondsOfDay());
     const chosen = el("manualCardType").value;
     const type = chosen === "auto" ? autoCardType(badge) : chosen;
-    const plan = cardPlan(type, badge, punches);
-    setStatus(el("manualStatus"), `${cardTypeLabel(type)}-kortti ${badge} asetettu (leimat ${punches.map(p => `${p.code} ${clockText(p.seconds)}`).join(", ")}), odotetaan lukupyyntöjä...`);
-    setStatus(el("manualStatus"), ...readOutMessage(plan, await readOut(plan)));
+    const { card, plan } = cardPlan(type, badge, anchored);
+    setStatus(el("manualStatus"), `${cardTypeLabel(type)}-kortti ${badge} asetettu (${describeCard(card)}), odotetaan lukupyyntöjä...`);
+    setStatus(el("manualStatus"), ...readOutMessage(plan, await readOut(card, plan)));
   } catch (error) {
     setStatus(el("manualStatus"), error.message, "error");
   }
@@ -507,9 +519,9 @@ async function simulateAll() {
         skipped++;
         continue;
       }
-      const { type, plan } = planForCompetitor(competitor, minutes);
+      const { type, card, plan } = planForCompetitor(competitor, minutes);
       setStatus(el("serialStatus"), `${sent + 1} / ${state.competitors.length}: ${cardTypeLabel(type)}-kortti ${competitor.emitCard}...`);
-      const outcome = await readOut(plan);
+      const outcome = await readOut(card, plan);
       sent++;
       if (!outcome.confirmed) unconfirmed++;
       if (sent + skipped < state.competitors.length && state.simulatingAll) {

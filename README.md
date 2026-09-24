@@ -112,23 +112,24 @@ Web-sovelluksen rinnalla on erillinen sivu [`web/sportident.html`](web/sportiden
 
 Sivu kayttaa samoja kilpailutiedostoja (`KILP.DAT`, `KilpSrj.xml`, `radat1.xml`/`radat.xml`) ja sama kilpailijan kortti-/Emit-numero KILP.DAT:sta toimii myos SI-kortin sarjanumerona. Tuettuja korttisukupolvia: SI5, SI6, SI9, SI8, pCard, tCard ja SI10/11 - joko automaattisesti kortin numeroalueen perusteella (samat rajat kuin Pirilan omassa koodissa) tai pakotettuna valikosta. Tarkoitettu ensisijaisesti [Pirilan SportIdent-tuen](https://github.com/PirilaTP/tulospalvelu/tree/feature/sportident-reader) testaamiseen kehityksen aikana; katso sivun oma ohjeosio lisatietoja varten. EMIT.DAT-uusinta ei viela ole tuettu SportIdent-simulaattorissa (vain Emit 250 -simulaattorissa).
 
-Kortin voi lahettaa myos kasin ilman kilpailutiedostoja: kortin numero ja leimat muodossa `76(239),88(100),92(400)` (rastikoodi ja suluissa rastivaliaika sekunteina edellisesta leimasta). SI-kortti tallentaa kellonajat, joten leimat ajoitetaan paattymaan juuri ennen lukuhetkea.
+Kortin voi lahettaa myos kasin ilman kilpailutiedostoja: kortin numero ja leimat muodossa `76(239),88(100),92(400)` (rastikoodi ja suluissa rastivaliaika sekunteina edellisesta leimasta, ensimmainen lahdosta). SI-kortti tallentaa kellonajat, joten leimat ajoitetaan paattymaan juuri ennen lukuhetkea. Kortille kirjoitetaan oletuksena lahtoleima ja nollausleima (2 min ennen lahtoa); ilman lahtoleimaa Pirila laskee ajat nollausleimasta tai ensimmaisesta rastista, jolloin ensimmainen rastivali ei nay oikein.
 
 Protokolla ja kortin muistin koodaus ovat tiedostossa [`web/si-protocol.js`](web/si-protocol.js). Kehykset, CRC:t ja kortin muistin tavut on tarkistettu oikean SI-aseman sarjaliikennelokeja vastaan (SI5, SI6, SI8, SI10/SIAC): simulaattorin kortti-ilmoitukset ovat tavulleen samat kuin oikean aseman, ja kortin muisti on sama niissa kohdissa, joita Pirilan ohjelma lukee.
 
 ### Testit
 
-[`test/si-simulator.test.mjs`](test/si-simulator.test.mjs) ajaa lokitiedostot `tmp/SI-Card*.txt` (eivat kuulu versionhallintaan) Pirilan `lue_SI()`/`tulkSI()`-koodin JavaScript-portin ([`test/pirila-host.mjs`](test/pirila-host.mjs)) lapi, seka oikean aseman kehyksilla etta simulaattorin tuottamilla, ja vertaa tuloksia lokien yhteenvetoon. Ajo (Node 20+):
+[`test/si-simulator.test.mjs`](test/si-simulator.test.mjs) ajaa simulaattorin tuottamat kortit Pirilan lukukoodin JavaScript-portin ([`test/pirila-host.mjs`](test/pirila-host.mjs): `lue_SI()`, `tulkSI()` ja `HkIV.cpp`:n `tall_emit()`, haaran commit `6893d1d`) lapi ja tarkistaa, etta kasin syotetyt rastivaliajat paatyvat Pirilan leimaustietueeseen oikein kaikilla korttityypeilla. Lisaksi se ajaa lokitiedostot `tmp/SI-Card*.txt` (eivat kuulu versionhallintaan) seka oikean aseman kehyksilla etta simulaattorin tuottamilla ja vertaa tuloksia lokien yhteenvetoon. Ajo (Node 20+):
 
 ```bash
 node --test test/si-simulator.test.mjs
 ```
 
-Ilman lokitiedostoja testit ohitetaan.
+Ilman lokitiedostoja lokitestit ohitetaan.
 
-### Havainto: SI5-kortit Pirilan haarassa
+### Havainnot Pirilan haarassa
 
-`feature/sportident-reader`-haaran `tulkSI()` lukee SI5-kortin kentat etumerkillisina `char`-arvoina (C++Builderin oletus, eika projekteissa ole unsigned char -asetusta). Oikea SI5-kortti 229401 tulkitaan siksi korttinumeroksi 229145, ja kaikki leimausajat, joiden 12 tunnin sisainen sekuntiarvo on 32768 tai yli (klo 9.06.08 jalkeen aamu- tai iltapaivalla), menevat vaarin. Pirilan omat SI5-testit kayttavat vain alle 128:n tavuarvoja, joten ne eivat huomaa tata. Testisarjassa on asiasta `todo`-testi, joka alkaa menna lapi, kun Pirila korjaa kentat `unsigned char` -tyyppisiksi.
+- SI5- ja legacy-SI6-korttien kentat luettiin etumerkillisina `char`-arvoina, joten esim. oikea SI5-kortti 229401 tulkittiin 229145:ksi. Korjattu haarassa (commit `ea7fc66`).
+- SI5-kortilla iltapaivalla luettuna lukuhetken 250-rivi on 12 tuntia pielessa (esim. 43944 s eika 744 s): SI5 tallentaa ajat 12 tunnin jaksossa ilman aamu/iltapaiva-tietoa, mutta `HkIV.cpp` vahentaa ne PC:n vuorokaudenajasta. Rastiajat ovat oikein.
 
 ## Projektin tiedostot
 

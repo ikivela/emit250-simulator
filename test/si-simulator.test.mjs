@@ -144,14 +144,50 @@ function planFromSummary(log, type) {
 // What the logged summary says Pirila should end up with.
 function expectedDecode(log, type) {
   // SI8+ keep the clear/check punch at block 0 [8:12], which tulkSI reads
-  // as "check"; SI6 keeps a separate clear slot that tulkSI ignores.
-  const check = type === "si5" || type === "si6ext" ? null : log.summary.clear ?? log.summary.check;
+  // as "check"; SI6 has a separate clear slot that tulkSI uses as the check
+  // when there is no check punch. SI5 has no clear punch.
+  const check = type === "si5" ? null : log.summary.check ?? log.summary.clear;
   return { badge: log.summary.siid, punches: log.summary.records, check: check ? check.seconds : null };
 }
 
 function actualDecode(result) {
   const empty = value => value === TMAALI0 || value === 61166;
   return { badge: result.badge, punches: punchList(result), check: empty(result.check) ? null : result.check };
+}
+
+// Manually typed splits ("rastivaliajat") must come out of Pirila's EMIT
+// record as the same cumulative times from the start, for every card type.
+// A representative card number per type, since the host picks the SI8+
+// subtype from the number range.
+const TYPE_BADGES = { si5: 12345, si6ext: 12345, si9: 1000123, si8: 2000123, pcard: 4000123, tcard: 6000123, si1011: 7000123 };
+
+async function manualReadOut(type, { withStart, withClear, readAt }) {
+  const anchored = SI.anchorPunches(SI.parseManualPunches("76(239),88(100),92(400)"), readAt);
+  const plan = SI.planForCard({
+    type,
+    badge: TYPE_BADGES[type],
+    punches: anchored.punches,
+    startSeconds: withStart ? anchored.startSeconds : null,
+    clearSeconds: withClear ? SI.secondsOfDay(anchored.startSeconds - 120) : null,
+    dayOfWeek: 4
+  });
+  const { host } = await simulatorRead(plan);
+  return toEmitRecord(tulkSI(host.sibuf, host.type, host.sibuf.length), readAt).splits.map(s => `${s.code}:${s.elapsed}`);
+}
+
+for (const type of Object.keys(TYPE_BADGES)) {
+  test(`${SI.cardTypeLabel(type)}: manual splits with a start punch reach Pirila as times from the start`, async () => {
+    // 11:21:02 = the read time in the reported HkKisaWin screenshot.
+    assert.deepEqual(await manualReadOut(type, { withStart: true, withClear: true, readAt: 11 * 3600 + 21 * 60 + 2 }), ["76:239", "88:339", "92:739", "250:744"]);
+  });
+
+  test(`${SI.cardTypeLabel(type)}: without a start punch Pirila's zero is the clear punch or the first control`, async () => {
+    const readAt = 11 * 3600 + 21 * 60 + 2;
+    const fromFirst = ["76:0", "88:100", "92:500", "250:505"];
+    // SI5 has no clear punch, so it always falls back to the first control.
+    assert.deepEqual(await manualReadOut(type, { withStart: false, withClear: true, readAt }), type === "si5" ? fromFirst : ["76:359", "88:459", "92:859", "250:864"]);
+    assert.deepEqual(await manualReadOut(type, { withStart: false, withClear: false, readAt }), fromFirst);
+  });
 }
 
 if (!logFiles.length) test("SI station logs", { skip: "tmp/SI-Card*.txt not found" }, () => {});
@@ -180,7 +216,7 @@ for (const name of logFiles) {
     const station = replayStation(log, hostQueue);
     try {
       const { type: sitype, sibuf } = await readCard(hostQueue, station.send);
-      assert.deepEqual(actualDecode(tulkSI(sibuf, sitype, sibuf.length, { signedChar: false })), expectedDecode(log, type));
+      assert.deepEqual(actualDecode(tulkSI(sibuf, sitype, sibuf.length)), expectedDecode(log, type));
     } finally {
       station.stop();
     }
@@ -188,7 +224,7 @@ for (const name of logFiles) {
 
   test(`${label}: simulator frames decode to the same summary`, async () => {
     const { host, outcome } = await simulatorRead(planFromSummary(log, type));
-    assert.deepEqual(actualDecode(tulkSI(host.sibuf, host.type, host.sibuf.length, { signedChar: false })), expectedDecode(log, type));
+    assert.deepEqual(actualDecode(tulkSI(host.sibuf, host.type, host.sibuf.length)), expectedDecode(log, type));
     assert.equal(outcome.confirmed, true, "Pirila's beep after the read");
   });
 
@@ -227,34 +263,11 @@ for (const name of logFiles) {
       station.stop();
     }
     const { host: sim } = await simulatorRead(planFromSummary(log, type));
-    for (const signedChar of [false, true]) {
-      assert.deepEqual(
-        toEmitRecord(tulkSI(sim.sibuf, sim.type, sim.sibuf.length, { signedChar }), readAt),
-        toEmitRecord(tulkSI(real.sibuf, real.type, real.sibuf.length, { signedChar }), readAt),
-        `signedChar=${signedChar}`
-      );
-    }
+    assert.deepEqual(
+      toEmitRecord(tulkSI(sim.sibuf, sim.type, sim.sibuf.length), readAt),
+      toEmitRecord(tulkSI(real.sibuf, real.type, real.sibuf.length), readAt)
+    );
   });
-
-  if (type === "si5") {
-    // Not a simulator check: documents a Pirila bug the logged SI5 card
-    // exposes. tulkSI() case 5 reads the SI5tp struct's plain `char`
-    // fields, which are signed on Pirila's C++Builder build, so any byte
-    // >= 0x80 (card number low byte 0xD9 here, and every time after 9:06:08
-    // am/pm - 0x842F for 9:23:59) goes negative. Marked todo so the suite
-    // stays green; it starts passing once Pirila casts to unsigned char.
-    test(`${label}: Pirila decodes the real SI5 card correctly with signed char`, { todo: "Pirila bug: SI5 fields read as signed char" }, async () => {
-      const hostQueue = new SI.ByteQueue();
-      const station = replayStation(log, hostQueue);
-      try {
-        const { type: sitype, sibuf } = await readCard(hostQueue, station.send);
-        const decoded = tulkSI(sibuf, sitype, sibuf.length, { signedChar: true });
-        assert.deepEqual(actualDecode(decoded), expectedDecode(log, type));
-      } finally {
-        station.stop();
-      }
-    });
-  }
 }
 
 // Card memory offsets tulkSI() (and lue_SI()'s block switching) read, per

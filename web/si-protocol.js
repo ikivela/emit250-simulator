@@ -129,6 +129,10 @@
 
   const MAX_PUNCHES = { si5: 30, si6ext: 64, si9: 50, si8: 30, pcard: 20, tcard: 25, si1011: 128 };
 
+  // Station code written in the start punch slot. tulkSI() only checks that
+  // it isn't 0xEE ("no start"), so any other value works.
+  const START_CN = 0x01;
+
   function filledBlock(value) {
     return new Uint8Array(128).fill(value);
   }
@@ -144,7 +148,7 @@
   //   [24] series  [25:28] SIID  [32:] owner data (';'-separated, EE-padded)
   // Punch records are {PTD, CN, time_H, time_L} (tCard: 8-byte records),
   // unused slots 0xEE.
-  function buildExtFamilyBlocks(type, badge, punches, clearSeconds, dayOfWeek) {
+  function buildExtFamilyBlocks(type, badge, punches, clearSeconds, startSeconds, dayOfWeek) {
     const isSi10 = type === "si1011";
     const layout = isSi10 ? null : EXT_FAMILY_LAYOUT[type];
     const punchBlocks = isSi10 ? Math.min(4, Math.max(1, Math.ceil(punches.length / 32))) : 1;
@@ -153,6 +157,7 @@
     writeBytes(flat, 0, uidBytes(badge));
     writeBytes(flat, 4, [0xea, 0xea, 0xea, 0xea]);
     if (clearSeconds !== null) writeBytes(flat, 8, extPunch(0xff, clearSeconds, dayOfWeek));
+    if (startSeconds !== null) writeBytes(flat, 12, extPunch(START_CN, startSeconds, dayOfWeek));
     flat[20] = 0x00;
     flat[21] = punches.length ? punches[punches.length - 1].code & 0xff : 0x00;
     flat[22] = Math.min(255, punches.length);
@@ -181,7 +186,7 @@
   //   [17] last punched CN  [18] punch count  [20:24] finish  [24:28] start
   //   [28:32] check  [32:36] clear  [44:] owner name text (space padded)
   // Blocks 6 and 7 hold 32 punch records each; block 1 is owner data.
-  function buildSI6Blocks(badge, punches, clearSeconds, dayOfWeek) {
+  function buildSI6Blocks(badge, punches, clearSeconds, startSeconds, dayOfWeek) {
     const block0 = filledBlock(0x20);
     writeBytes(block0, 0, [0x01, 0x01, 0x01, 0x01, 0xed, 0xed, 0xed, 0xed, 0x55, 0xaa]);
     writeBytes(block0, 10, [(badge >>> 24) & 0xff, (badge >>> 16) & 0xff, (badge >>> 8) & 0xff, badge & 0xff]);
@@ -190,6 +195,7 @@
     block0[18] = Math.min(64, punches.length);
     block0[19] = Math.min(64, punches.length) + 1;
     block0.fill(NO_PUNCH, 20, 32); // finish, start, check
+    if (startSeconds !== null) writeBytes(block0, 24, extPunch(START_CN, startSeconds, dayOfWeek));
     if (clearSeconds !== null) writeBytes(block0, 32, extPunch(0xff, clearSeconds, dayOfWeek));
     else block0.fill(NO_PUNCH, 32, 36);
     writeBytes(block0, 36, [0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01]);
@@ -219,13 +225,17 @@
     return { cns, cn };
   }
 
-  function buildSI5Card(badge, punches) {
+  function buildSI5Card(badge, punches, startSeconds) {
     const { cns, cn } = si5CardNumber(badge);
     const card = new Uint8Array(128);
     writeBytes(card, 0, [0xaa, 0x2e, 0x00, 0x01, cn >> 8, cn & 0xff, cns]);
     card[16] = 0x65;
     writeBytes(card, 17, [cn >> 8, cn & 0xff]);
     card.fill(NO_PUNCH, 19, 23); // start, finish
+    if (startSeconds !== null) {
+      const raw = secondsOfDay(startSeconds) % 43200;
+      writeBytes(card, 19, [raw >> 8, raw & 0xff]);
+    }
     card[23] = Math.min(30, punches.length) + 1;
     card[24] = 0x56;
     card.fill(NO_PUNCH, 25, 27); // check
@@ -257,11 +267,15 @@
   }
 
   // Builds everything the station needs to serve one card read.
-  //   card = { type, badge, punches: [{code, seconds}], clearSeconds, dayOfWeek }
-  // seconds are seconds of day; clearSeconds null = no clear/check punch.
+  //   card = { type, badge, punches: [{code, seconds}], startSeconds,
+  //            clearSeconds, dayOfWeek }
+  // seconds are seconds of day; startSeconds / clearSeconds null = no start
+  // punch / no clear punch. Without a start punch Pirila takes the zero
+  // point from the clear punch (SI6+) or the first control.
   function planForCard(card) {
     const { type, badge, punches } = card;
     const clearSeconds = card.clearSeconds ?? null;
+    const startSeconds = card.startSeconds ?? null;
     const dayOfWeek = card.dayOfWeek ?? 0;
     if (!Number.isInteger(badge) || badge < 1 || badge > 0xffffff) throw new Error("Kortin numeron pitää olla välillä 1–16777215.");
     const limit = MAX_PUNCHES[type];
@@ -281,7 +295,7 @@
         notifyCmd: CMD_SI5_INSERTED,
         cardId: [0x00, cns, cn >> 8, cn & 0xff],
         requestCmd: CMD_READ_SI5,
-        singleShot: buildSI5Card(badge, punches),
+        singleShot: buildSI5Card(badge, punches, startSeconds),
         blocks: null,
         requiredBlocks: []
       };
@@ -293,11 +307,11 @@
         cardId: [0x00, (badge >>> 16) & 0xff, (badge >>> 8) & 0xff, badge & 0xff],
         requestCmd: CMD_READ_SI6,
         singleShot: null,
-        blocks: buildSI6Blocks(badge, punches, clearSeconds, dayOfWeek),
+        blocks: buildSI6Blocks(badge, punches, clearSeconds, startSeconds, dayOfWeek),
         requiredBlocks: [0, 1, 6, 7]
       };
     }
-    const blocks = buildExtFamilyBlocks(type, badge, punches, clearSeconds, dayOfWeek);
+    const blocks = buildExtFamilyBlocks(type, badge, punches, clearSeconds, startSeconds, dayOfWeek);
     return {
       type, badge,
       notifyCmd: CMD_SI8_INSERTED,
@@ -332,14 +346,18 @@
   // Evenly spaced punches for a course, ending `readDelaySeconds` before
   // `readAtSeconds` (the moment the card is read, seconds of day) - the same
   // spacing as the Emit 250 simulator, anchored to the clock because SI
-  // cards store times of day, not elapsed times.
+  // cards store times of day, not elapsed times. Returns the start time
+  // (seconds of day) and the punches.
   function evenPunches(controls, totalSeconds, readAtSeconds, readDelaySeconds = 5) {
     const total = Math.max(60, Math.round(totalSeconds));
     const startSeconds = readAtSeconds - readDelaySeconds - total;
-    return controls.map((code, index) => ({
-      code,
-      seconds: secondsOfDay(startSeconds + Math.max(1, Math.round((total * (index + 1)) / controls.length)))
-    }));
+    return {
+      startSeconds: secondsOfDay(startSeconds),
+      punches: controls.map((code, index) => ({
+        code,
+        seconds: secondsOfDay(startSeconds + Math.max(1, Math.round((total * (index + 1)) / controls.length)))
+      }))
+    };
   }
 
   // Parses "code(split),code(split),..." e.g. "76(239),88(100),92(400)".
@@ -361,11 +379,15 @@
   }
 
   // Turns elapsed-from-start punches into clock times so the last punch
-  // happens `readDelaySeconds` before the read.
+  // happens `readDelaySeconds` before the read. Returns the start time
+  // (seconds of day) and the punches.
   function anchorPunches(elapsedPunches, readAtSeconds, readDelaySeconds = 5) {
     const last = elapsedPunches.length ? elapsedPunches[elapsedPunches.length - 1].elapsed : 0;
     const startSeconds = readAtSeconds - readDelaySeconds - last;
-    return elapsedPunches.map(punch => ({ code: punch.code, seconds: secondsOfDay(startSeconds + punch.elapsed) }));
+    return {
+      startSeconds: secondsOfDay(startSeconds),
+      punches: elapsedPunches.map(punch => ({ code: punch.code, seconds: secondsOfDay(startSeconds + punch.elapsed) }))
+    };
   }
 
   function parseManualBadge(text) {

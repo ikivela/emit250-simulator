@@ -1,16 +1,15 @@
 // A JavaScript port of the host side of Pirila's SportIdent support
-// (feature/sportident-reader branch), for testing the simulator without a
-// Windows build of tulospalvelu:
+// (feature/sportident-reader branch as of commit 6893d1d), for testing the
+// simulator without a Windows build of tulospalvelu:
 //   - readCard(): Tp/TpLaitteet.cpp lue_SI(), EXT protocol paths - reads the
 //     insert notification, sends the same hard-coded request frames, and
 //     consumes the station's replies byte by byte with the same header-skip
 //     counting and mid-read block switching.
-//   - tulkSI(): Tp/SITulkinta.cpp, incl. the C `char` (signed on Pirila's
-//     C++Builder build, no unsigned-char option in its .cbproj files) used
-//     for the SI5 struct fields.
-//   - toEmitRecord(): the SPORTIDENT branch of Juk/VIv.cpp that turns the
-//     result into Pirila's EMIT record (61166 remap, times relative to the
-//     start, 240 finish / 250 reader codes).
+//   - tulkSI(): Tp/SITulkinta.cpp (SI5 legacy layout, SI6-EXT and the SI8+
+//     EXT family).
+//   - toEmitRecord(): the SPORTIDENT branch of Hk/HkIV.cpp tall_emit() that
+//     turns the result into Pirila's EMIT record (61166 remap, zero point,
+//     times relative to it, 240 finish / 250 reader codes).
 
 export const TMAALI0 = -24 * 36000 * 10;
 const MAXNLEIMA = 50;
@@ -129,26 +128,27 @@ function tulkExtLeimat(b, r, start, step, bound) {
   }
 }
 
-export function tulkSI(b, type, buflen, { signedChar = true } = {}) {
+export function tulkSI(b, type, buflen) {
   const r = { badge: 0, start: 0, check: 0, finish: 0, cc: new Array(66).fill(0), ct: new Array(66).fill(0) };
-  const c = signedChar ? v => (v > 127 ? v - 256 : v) : v => v; // C `char`
   switch (type) {
     case 5: {
       // SI5tp struct offsets in SIbuf: CN 7-8, CNS 9, ST 22-23, FT 24-25,
-      // CT 28-29, rows from 35 (16 bytes each).
-      const cns = c(b[9]);
-      r.badge = 256 * c(b[7]) + c(b[8]) + (cns > 1 ? cns * 100000 : 0);
-      r.start = 256 * c(b[22]) + c(b[23]);
-      r.check = 256 * c(b[28]) + c(b[29]);
-      r.finish = 256 * c(b[24]) + c(b[25]);
+      // CT 28-29, rows from 35 (16 bytes each). Bytes are read unsigned
+      // (ea7fc66) and unused slots (CN 0) stay zero.
+      const cns = b[9];
+      r.badge = 256 * b[7] + b[8] + (cns > 1 ? cns * 100000 : 0);
+      r.start = 256 * b[22] + b[23];
+      r.check = 256 * b[28] + b[29];
+      r.finish = 256 * b[24] + b[25];
       for (let row = 0; row < 6; row++) {
         const rowBase = 35 + row * 16;
         r.cc[31 + row] = b[rowBase];
         for (let i = 0; i < 5; i++) {
           const k = 1 + i + 5 * row;
           const p = rowBase + 1 + i * 3;
+          if (b[p] === 0) continue;
           r.cc[k] = b[p];
-          r.ct[k] = 256 * c(b[p + 1]) + c(b[p + 2]);
+          r.ct[k] = 256 * b[p + 1] + b[p + 2];
           if (row + i === 0) {
             if (r.start !== 61166 && r.ct[1] && r.ct[1] < r.start) r.ct[1] += 43200;
           } else if (r.ct[k] && r.ct[k] < r.ct[k - 1]) r.ct[k] += 43200;
@@ -166,6 +166,8 @@ export function tulkSI(b, type, buflen, { signedChar = true } = {}) {
       r.finish = b[21] === 0xee ? TMAALI0 : 256 * b[22] + b[23] + (b[20] & 1) * 43200;
       r.start = b[25] === 0xee ? TMAALI0 : 256 * b[26] + b[27] + (b[24] & 1) * 43200;
       r.check = b[29] === 0xee ? TMAALI0 : 256 * b[30] + b[31] + (b[28] & 1) * 43200;
+      // No check punch: the clear punch takes its place (9c0b7dd).
+      if (r.check === TMAALI0 && b[33] !== 0xee) r.check = 256 * b[34] + b[35] + (b[32] & 1) * 43200;
       tulkExtLeimat(b, r, 256, 4, buflen);
       break;
     default: throw new Error(`tulkSI: type ${type} not ported`);
@@ -181,14 +183,21 @@ export function punchList(result) {
   return punches;
 }
 
-// --- Juk/VIv.cpp, SPORTIDENT branch --------------------------------------
+// --- Hk/HkIV.cpp tall_emit(), SPORTIDENT branch --------------------------
 
+// readAtSeconds = the read time as seconds of day (HkIV's lukija_abs).
 export function toEmitRecord(result, readAtSeconds) {
-  const lukija = readAtSeconds * 10;
   const r = { ...result, cc: [...result.cc], ct: [...result.ct] };
   if (r.start === 61166) r.start = TMAALI0;
   let start = r.start;
   if (r.check === 61166) r.check = TMAALI0;
+  // Zero point: start punch, else the clear/check punch if it is before the
+  // first control and at most 12 h earlier, else the first control (below).
+  if (start === TMAALI0 && r.check !== TMAALI0) {
+    let first = 1;
+    while (first < MAXNLEIMA && !r.ct[first]) first++;
+    if (first >= MAXNLEIMA || (r.ct[first] - r.check + 86400) % 86400 <= 43200) start = r.check;
+  }
   if (r.finish === 61166) r.finish = TMAALI0;
   const code = new Array(MAXNLEIMA).fill(0);
   const time = new Array(MAXNLEIMA).fill(0);
@@ -207,7 +216,7 @@ export function toEmitRecord(result, readAtSeconds) {
       i++;
     }
     code[i] = 250;
-    time[i] = start !== TMAALI0 ? (Math.trunc(lukija / 10) - start + 86400) % 86400 : (Math.trunc(lukija / 10) + 86400) % 86400;
+    time[i] = start !== TMAALI0 ? (readAtSeconds - start + 86400) % 86400 : (readAtSeconds + 86400) % 86400;
   }
   const splits = [];
   for (let k = 0; k < MAXNLEIMA; k++) if (code[k]) splits.push({ code: code[k], elapsed: time[k] });
