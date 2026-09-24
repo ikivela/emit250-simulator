@@ -34,6 +34,9 @@
     .status.error { color: #ad1f2d; font-weight: 650; }
     .status.success { color: #176b3a; font-weight: 650; }
     .details { color: #536078; align-self: center; }
+    .check { display: flex; align-items: center; gap: 8px; min-height: 40px; font-weight: 400; }
+    .log { margin: 12px 0 0; min-height: 3em; max-height: 240px; overflow: auto; padding: 10px 12px; background: #f6f8fb; border: 1px solid #dce1e9; border-radius: 8px; font: .82rem/1.45 ui-monospace, Consolas, monospace; color: #2a3547; white-space: pre-wrap; }
+    .log:empty::before { content: "Protokollaloki: kehykset näkyvät tässä kortinluvun aikana."; color: #8792a6; }
     .notice { padding: 10px 12px; background: #fff4d7; border-radius: 7px; margin-bottom: 16px; display: none; }
     .dropzone { border: 2px dashed #9aabc3; border-radius: 10px; padding: 18px; margin-bottom: 14px; text-align: center; color: #536078; background: #f8faff; transition: border-color .15s, background .15s, color .15s; }
     .dropzone strong { display: block; color: #162033; font-size: 1rem; margin-bottom: 4px; }
@@ -68,7 +71,9 @@
           <li><a href="https://github.com/ikivela/emit250-simulator" target="_blank" rel="noopener noreferrer">Tämän simulaattorin lähdekoodi GitHubissa</a></li>
         </ul>
         <p><strong>Korttityyppi:</strong> Automaattinen valitsee SI-korttisukupolven kilpailijan kortti/Emit-numeron perusteella (samat numeroalueet kuin Pirilän ohjelmassa: &lt;1 000 000 = SI6, 1 000 000–1 999 999 = SI9, 2 000 000–3 999 999 = SI8, 4 000 000–5 999 999 = pCard, 6 000 000–6 999 999 = tCard, ≥ 7 000 000 = SI10/11). SI5 ei kuulu numeroalueisiin, joten se pitää valita erikseen. Muut valinnat pakottavat protokollapolun riippumatta kortin numeroalueesta - hyödyllistä Pirilän eri korttityyppien käsittelyn testaamiseen, mutta ei välttämättä vastaa oikean kortin luokittelua.</p>
-        <p>Kortin sisältö rakennetaan kilpailijan radan rastikoodeista tasavälisin leimausajoin annettuun loppuaikaan asti (kuten Emit 250 -simulaattorissa). Erillistä lähtö-, tarkastus- tai maalileimaa ei aseteta - Pirilän ohjelma käyttää tällöin ensimmäistä rastileimaa lähtöhetkenä ja lukuhetkeä maalina, samaan tapaan kuin Emit-simulaattorin 250-lukijakoodi.</p>
+        <p>Kortin sisältö rakennetaan kilpailijan radan rastikoodeista tasavälisin leimausajoin annettuun loppuaikaan asti (kuten Emit 250 -simulaattorissa). SI-kortti tallentaa kellonajat, joten leimat ajoitetaan päättymään 5 s ennen lukuhetkeä. Erillistä lähtö- tai maalileimaa ei aseteta - Pirilän ohjelma käyttää tällöin ensimmäistä rastileimaa lähtöhetkenä ja lukuhetkeä maalina (250-koodi). Nollausleima (CN 255) lisätään oletuksena kuten oikeissa korteissa; SI8–SI11-korteilla Pirilä lukee sen tarkastusaikana.</p>
+        <p>Kehysrakenne, CRC:t ja kortin muistin tavut on tarkistettu oikean SI-aseman sarjaliikennelokeja vastaan (SI5, SI6, SI8, SI10/SIAC). Pirilän ohjelma kuittaa onnistuneen luvun piippauskomennolla; simulaattori odottaa sitä ja kertoo, jos kuittausta ei tullut. Kehykset näkyvät sivun alareunan protokollalokissa.</p>
+        <p><strong>Huom. SI5:</strong> feature/sportident-reader-haaran <code>tulkSI()</code> lukee SI5-kortin kentät etumerkillisinä <code>char</code>-arvoina, joten Pirilä tulkitsee oikean SI5-kortin väärin aina kun jokin tavu on ≥ 128 (esim. kortti 229401 → 229145, ja kaikki kellonajat 9.06.08 jälkeen aamu- tai iltapäivällä). Simulaattori tuottaa saman tavusisällön kuin oikea kortti, joten virhe näkyy myös simuloiduilla korteilla.</p>
         <p><strong>Käsin lähetys:</strong> alempana olevalla lomakkeella voi lähettää mielivaltaisen kortin ilman kilpailutiedostoja - riittää että sarjaportti on valittu. Anna kortin numero ja leimat muodossa <code>rastikoodi(sekuntia)</code> pilkulla erotettuna, esim. <code>76(239),88(100),92(400)</code> - sekunnit ovat rastiväliaika eli kulunut aika edellisestä leimasta (tai lähdöstä ensimmäiselle rastille), ei kellonaika. Esimerkki tarkoittaa: rasti 76 239 s lähdöstä, rasti 88 100 s siitä (yhteensä 339 s), rasti 92 400 s siitä (yhteensä 739 s).</p>
       </div>
     </details>
@@ -147,7 +152,13 @@
       </div>
       <p id="manualStatus" class="status">Anna kortin numero ja leimat, esim. 76(239),88(100),92(400). Vaatii avatun sarjaportin.</p>
     </section>
+
+    <section class="card">
+      <label class="check"><input id="clearPunch" type="checkbox" checked> Lisää nollausleima (CN 255) 2 min ennen ensimmäistä leimaa, kuten oikeissa korteissa</label>
+      <pre id="protocolLog" class="log" aria-label="Protokollaloki"></pre>
+    </section>
   </main>
+  <script src="si-protocol.js"></script>
   <script src="sportident.js"></script>
 </body>
 </html>

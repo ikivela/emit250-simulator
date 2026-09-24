@@ -1,2 +1,4 @@
 *.xml
 *.DAT
+tmp/
+*.code-workspace

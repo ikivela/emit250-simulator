@@ -110,13 +110,32 @@ Viestin `KILP.DAT` on rakenteeltaan eri kuin yksilokilpailun: yksi tietue per jo
 
 Web-sovelluksen rinnalla on erillinen sivu [`web/sportident.html`](web/sportident.html), joka simuloi SportIdent-lukijaasemaa (BSM8, EXT-protokolla, 38400 baudia) Web Serial -yhteydella. Toisin kuin Emit 250 -simulaattori (joka vain lahettaa yksisuuntaisen 217 tavun paketin), SportIdent-simulaattori esiintyy aidosti asemana sarjaportissa: se lahettaa "kortti asetettu" -ilmoituksen ja vastaa Pirilan ohjelman lohkokyselyihin, joten se testaa koko lukuketjun (`lue_SI`/`tulkSI` Pirilan lahdekoodissa).
 
-Sivu kayttaa samoja kilpailutiedostoja (`KILP.DAT`, `KilpSrj.xml`, `radat1.xml`/`radat.xml`) ja sama kilpailijan kortti-/Emit-numero KILP.DAT:sta toimii myos SI-kortin sarjanumerona. Tuettuja korttisukupolvia: SI5, SI6, SI9, SI8, pCard, tCard ja SI10/11 - joko automaattisesti kortin numeroalueen perusteella (samat rajat kuin Pirilan omassa koodissa) tai pakotettuna valikosta. Tarkoitettu ensisijaisesti [Pirilan SportIdent-tuen](https://github.com/PirilaTP/tulospalvelu/tree/feature/sportident-reader) testaamiseen kehityksen aikana; katso sivun oma ohjeosio lisatietoja varten. Tama on ensimmainen versio: EMIT.DAT-uusinta ei viela ole tuettu SportIdent-simulaattorissa (vain Emit 250 -simulaattorissa).
+Sivu kayttaa samoja kilpailutiedostoja (`KILP.DAT`, `KilpSrj.xml`, `radat1.xml`/`radat.xml`) ja sama kilpailijan kortti-/Emit-numero KILP.DAT:sta toimii myos SI-kortin sarjanumerona. Tuettuja korttisukupolvia: SI5, SI6, SI9, SI8, pCard, tCard ja SI10/11 - joko automaattisesti kortin numeroalueen perusteella (samat rajat kuin Pirilan omassa koodissa) tai pakotettuna valikosta. Tarkoitettu ensisijaisesti [Pirilan SportIdent-tuen](https://github.com/PirilaTP/tulospalvelu/tree/feature/sportident-reader) testaamiseen kehityksen aikana; katso sivun oma ohjeosio lisatietoja varten. EMIT.DAT-uusinta ei viela ole tuettu SportIdent-simulaattorissa (vain Emit 250 -simulaattorissa).
+
+Kortin voi lahettaa myos kasin ilman kilpailutiedostoja: kortin numero ja leimat muodossa `76(239),88(100),92(400)` (rastikoodi ja suluissa rastivaliaika sekunteina edellisesta leimasta). SI-kortti tallentaa kellonajat, joten leimat ajoitetaan paattymaan juuri ennen lukuhetkea.
+
+Protokolla ja kortin muistin koodaus ovat tiedostossa [`web/si-protocol.js`](web/si-protocol.js). Kehykset, CRC:t ja kortin muistin tavut on tarkistettu oikean SI-aseman sarjaliikennelokeja vastaan (SI5, SI6, SI8, SI10/SIAC): simulaattorin kortti-ilmoitukset ovat tavulleen samat kuin oikean aseman, ja kortin muisti on sama niissa kohdissa, joita Pirilan ohjelma lukee.
+
+### Testit
+
+[`test/si-simulator.test.mjs`](test/si-simulator.test.mjs) ajaa lokitiedostot `tmp/SI-Card*.txt` (eivat kuulu versionhallintaan) Pirilan `lue_SI()`/`tulkSI()`-koodin JavaScript-portin ([`test/pirila-host.mjs`](test/pirila-host.mjs)) lapi, seka oikean aseman kehyksilla etta simulaattorin tuottamilla, ja vertaa tuloksia lokien yhteenvetoon. Ajo (Node 20+):
+
+```bash
+node --test test/si-simulator.test.mjs
+```
+
+Ilman lokitiedostoja testit ohitetaan.
+
+### Havainto: SI5-kortit Pirilan haarassa
+
+`feature/sportident-reader`-haaran `tulkSI()` lukee SI5-kortin kentat etumerkillisina `char`-arvoina (C++Builderin oletus, eika projekteissa ole unsigned char -asetusta). Oikea SI5-kortti 229401 tulkitaan siksi korttinumeroksi 229145, ja kaikki leimausajat, joiden 12 tunnin sisainen sekuntiarvo on 32768 tai yli (klo 9.06.08 jalkeen aamu- tai iltapaivalla), menevat vaarin. Pirilan omat SI5-testit kayttavat vain alle 128:n tavuarvoja, joten ne eivat huomaa tata. Testisarjassa on asiasta `todo`-testi, joka alkaa menna lapi, kun Pirila korjaa kentat `unsigned char` -tyyppisiksi.
 
 ## Projektin tiedostot
 
 - `Emit250Simulator.ps1` - PowerShell-kayttoliittyma, tiedostojen luku ja Emit 250 -sanoman muodostus
 - `Start-Emit250Simulator.cmd` - kaynnistys Windowsissa
-- `web/` - selaimessa toimivat versiot ([index.html](web/index.html)/[app.js](web/app.js) Emit 250:lle, [sportident.html](web/sportident.html)/[sportident.js](web/sportident.js) SportIdentille), julkaistu GitHub Pagesiin osoitteessa [ikivela.github.io/emit250-simulator](https://ikivela.github.io/emit250-simulator/)
+- `web/` - selaimessa toimivat versiot ([index.html](web/index.html)/[app.js](web/app.js) Emit 250:lle, [sportident.html](web/sportident.html)/[sportident.js](web/sportident.js)/[si-protocol.js](web/si-protocol.js) SportIdentille)
+- `test/` - SportIdent-simulaattorin testit ja Pirilan SI-lukukoodin JavaScript-portti, julkaistu GitHub Pagesiin osoitteessa [ikivela.github.io/emit250-simulator](https://ikivela.github.io/emit250-simulator/)
 - `.github/workflows/static.yml` - GitHub Actions -tyonkulku, joka julkaisee `web/`-hakemiston GitHub Pagesiin
 - `KilpSrj.xml` ja `radat1.xml`/`radat.xml` - kilpailun luokka- ja ratatiedot (`radat.xml` viestikilpailussa)
 - `KILP.DAT` - kilpailijoiden (tai viestissa joukkueiden) binaaritiedot; ei kuulu versionhallintaan
