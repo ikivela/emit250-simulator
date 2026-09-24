@@ -1,6 +1,6 @@
 # Emit 250 -lukijasilmulaattori
 
-Windows PowerShell 5.1 -sovellus, joka simuloi Emit 250 -lukijan kortinlukutapahtumia Windowsissa. Samat toiminnot loytyvat myos selaimessa toimivana web-sovelluksena.
+Windows PowerShell 5.1 -sovellus, joka simuloi Emit 250 -lukijan kortinlukutapahtumia Windowsissa. Samat toiminnot loytyvat myos selaimessa toimivana web-sovelluksena. Mukana on myos erillinen SportIdent-lukijasimulaattori, katso [SportIdent-simulaattori](#sportident-simulaattori) alla.
 
 ## Web-sovellus (GitHub Pages)
 
@@ -106,11 +106,17 @@ Viestin `KILP.DAT` on rakenteeltaan eri kuin yksilokilpailun: yksi tietue per jo
 - Emit-numeron taytyy olla valilla 1-16 777 215 (paketin 3 tavun kentan koko). Valitulla kilpailijalla taytyy olla 1-49 rataan kuuluvaa leimauslaitetta. Lukijakoodi 250 vie yhden paketin paikan.
 - COM-portin taytyy olla olemassa (PowerShell-versio Windowsissa, web-versio kayttojarjestelman COM-porttilistalla) ennen lahetysta.
 
+## SportIdent-simulaattori
+
+Web-sovelluksen rinnalla on erillinen sivu [`web/sportident.html`](web/sportident.html), joka simuloi SportIdent-lukijaasemaa (BSM8, EXT-protokolla, 38400 baudia) Web Serial -yhteydella. Toisin kuin Emit 250 -simulaattori (joka vain lahettaa yksisuuntaisen 217 tavun paketin), SportIdent-simulaattori esiintyy aidosti asemana sarjaportissa: se lahettaa "kortti asetettu" -ilmoituksen ja vastaa Pirilan ohjelman lohkokyselyihin, joten se testaa koko lukuketjun (`lue_SI`/`tulkSI` Pirilan lahdekoodissa).
+
+Sivu kayttaa samoja kilpailutiedostoja (`KILP.DAT`, `KilpSrj.xml`, `radat1.xml`/`radat.xml`) ja sama kilpailijan kortti-/Emit-numero KILP.DAT:sta toimii myos SI-kortin sarjanumerona. Tuettuja korttisukupolvia: SI5, SI6, SI9, SI8, pCard, tCard ja SI10/11 - joko automaattisesti kortin numeroalueen perusteella (samat rajat kuin Pirilan omassa koodissa) tai pakotettuna valikosta. Tarkoitettu ensisijaisesti [Pirilan SportIdent-tuen](https://github.com/PirilaTP/tulospalvelu/tree/feature/sportident-reader) testaamiseen kehityksen aikana; katso sivun oma ohjeosio lisatietoja varten. Tama on ensimmainen versio: EMIT.DAT-uusinta ei viela ole tuettu SportIdent-simulaattorissa (vain Emit 250 -simulaattorissa).
+
 ## Projektin tiedostot
 
 - `Emit250Simulator.ps1` - PowerShell-kayttoliittyma, tiedostojen luku ja Emit 250 -sanoman muodostus
 - `Start-Emit250Simulator.cmd` - kaynnistys Windowsissa
-- `web/` - selaimessa toimiva versio ([index.html](web/index.html), [app.js](web/app.js)), julkaistu GitHub Pagesiin osoitteessa [ikivela.github.io/emit250-simulator](https://ikivela.github.io/emit250-simulator/)
+- `web/` - selaimessa toimivat versiot ([index.html](web/index.html)/[app.js](web/app.js) Emit 250:lle, [sportident.html](web/sportident.html)/[sportident.js](web/sportident.js) SportIdentille), julkaistu GitHub Pagesiin osoitteessa [ikivela.github.io/emit250-simulator](https://ikivela.github.io/emit250-simulator/)
 - `.github/workflows/static.yml` - GitHub Actions -tyonkulku, joka julkaisee `web/`-hakemiston GitHub Pagesiin
 - `KilpSrj.xml` ja `radat1.xml`/`radat.xml` - kilpailun luokka- ja ratatiedot (`radat.xml` viestikilpailussa)
 - `KILP.DAT` - kilpailijoiden (tai viestissa joukkueiden) binaaritiedot; ei kuulu versionhallintaan
