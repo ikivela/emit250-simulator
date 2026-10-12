@@ -493,6 +493,7 @@ async function selectPort() {
     el("sendButton").disabled = !state.selected;
     el("allButton").disabled = !state.competitors.length;
     el("startReplayButton").disabled = !state.replayEntries.length;
+    el("manualSendButton").disabled = false;
     setStatus(el("serialStatus"), "Sarjaportti avattu: 9600 baudia, 8N2.", "success");
   } catch (error) {
     if (error.name !== "NotFoundError") setStatus(el("serialStatus"), error.message, "error");
@@ -530,8 +531,50 @@ async function sendPacket() {
   }
 }
 
+// Parses "code(split),code(split),..." e.g. "76(239),88(100),92(400)".
+// Each split is the leg time in seconds since the previous punch (since the
+// start for the first one). Returns the codes and cumulative elapsed times
+// in the shape makeEmit250Packet expects for real times.
+function parseManualPunches(text) {
+  const entries = text.split(",").map(part => part.trim()).filter(Boolean);
+  if (!entries.length) throw new Error("Anna vähintään yksi leima muodossa 76(239),88(100),92(400).");
+  const controls = [];
+  const times = [];
+  let elapsed = 0;
+  for (const entry of entries) {
+    const match = entry.match(/^(\d{1,3})\s*\(\s*(\d+)\s*\)$/);
+    if (!match) throw new Error(`Virheellinen leima "${entry}". Käytä muotoa rastikoodi(sekuntia), esim. 76(239).`);
+    const code = Number(match[1]);
+    if (code < 1 || code > 249) throw new Error(`Rastikoodin pitää olla välillä 1–249 (saatiin ${code}); 250 on lukijan koodi.`);
+    elapsed += Number(match[2]);
+    if (elapsed > 65529) throw new Error("Kokonaisaika ylittää Emit-kortin enimmäisajan (65529 s).");
+    controls.push(code);
+    times.push(elapsed);
+  }
+  return { controls, times };
+}
+
+function parseManualBadge(text) {
+  const value = Number(String(text).trim());
+  if (!Number.isInteger(value) || value < 1 || value > 16777215) throw new Error("Anna kelvollinen Emit-numero (1–16777215).");
+  return value;
+}
+
+async function sendManualCard() {
+  try {
+    if (!state.port?.writable) throw new Error("Valitse sarjaportti ensin.");
+    const badge = parseManualBadge(el("manualBadge").value);
+    const { controls, times } = parseManualPunches(el("manualPunches").value);
+    await writePacket(makeEmit250Packet(badge, controls, 0, false, times));
+    setStatus(el("manualStatus"), `217 tavun paketti lähetetty Emit-kortille ${badge}${el("sendTwice").checked ? " kahdesti" : ""}: ${controls.length} leimaa, loppuaika ${times[times.length - 1]} s.`, "success");
+  } catch (error) {
+    setStatus(el("manualStatus"), error.message, "error");
+  }
+}
+
 function setSimulationControls(running) {
   state.simulatingAll = running;
+  el("manualSendButton").disabled = running || !state.port;
   el("allButton").disabled = running || !state.port || !state.competitors.length;
   el("stopAllButton").disabled = !running;
   el("sendButton").disabled = running || !state.selected || !state.port;
@@ -613,6 +656,7 @@ function setReplayControls(running) {
   el("allButton").disabled = running || !state.port || !state.competitors.length;
   el("sendButton").disabled = running || !state.selected || !state.port;
   el("saveButton").disabled = running || !state.selected;
+  el("manualSendButton").disabled = running || !state.port;
   el("connectButton").disabled = running;
 }
 
@@ -695,6 +739,7 @@ el("stopAllButton").addEventListener("click", stopSimulation);
 el("loadEmitButton").addEventListener("click", loadEmitDat);
 el("startReplayButton").addEventListener("click", startReplay);
 el("stopReplayButton").addEventListener("click", stopReplay);
+el("manualSendButton").addEventListener("click", sendManualCard);
 
 const dropzone = el("dropzone");
 

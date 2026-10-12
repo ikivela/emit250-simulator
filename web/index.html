@@ -72,6 +72,7 @@
         </ul>
         <p>Käytä asetuksia 9600 baudia, 8 databittiä, ei pariteettia ja 2 stop-bittiä.</p>
         <p><strong>Kisan uusinta (EMIT.DAT):</strong> lataa aiemman kisan alkuperäinen EMIT.DAT-leimaustiedosto omaan kenttäänsä kilpailijataulukon alla ja paina <em>Lataa EMIT.DAT</em>. Kilpailijat lähetetään maaliintuloaikojen mukaisessa järjestyksessä oikeilla leimausajoilla, ja koko kisa pakataan annettuun uusinnan kestoon suhteelliset välit säilyttäen.</p>
+        <p><strong>Käsin lähetys:</strong> alimmalla lomakkeella voi lähettää mielivaltaisen Emit-kortin ilman kilpailutiedostoja - riittää että sarjaportti on valittu. Anna Emit-numero ja leimat muodossa <code>rastikoodi(sekuntia)</code> pilkulla erotettuna, esim. <code>76(239),88(100),92(400)</code> - sekunnit ovat rastiväliaika eli kulunut aika edellisestä leimasta (tai lähdöstä ensimmäiselle rastille). Esimerkki tarkoittaa: rasti 76 239 s lähdöstä, rasti 88 100 s siitä (yhteensä 339 s), rasti 92 400 s siitä (yhteensä 739 s). Rastikoodit 1–249 ovat sallittuja (250 on lukijan koodi), ja kortin luku lisätään 5 s viimeisen leiman jälkeen.</p>
         <p><strong>Viestikilpailu:</strong> sivu tunnistaa viestin automaattisesti KilpSrj.xml:stä. Sarja-valitsin poistuu käytöstä ja taulukkoon ilmestyy Osuus-sarake — jokainen rivi on yhden joukkueen yhden osuuden juoksija.</p>
       </div>
     </details>
@@ -130,6 +131,15 @@
       </div>
       <p id="selectionDetails" class="details">Valitse kilpailija.</p>
       <p id="serialStatus" class="status">Sarjaporttia ei ole valittu.</p>
+    </section>
+
+    <section class="card">
+      <div class="files" style="grid-template-columns: 160px minmax(260px, 1fr) auto;">
+        <label>Emit-numero<input id="manualBadge" type="number" min="1" max="16777215" step="1" placeholder="esim. 123456"></label>
+        <label>Leimat: rastikoodi(rastiväliaika s), pilkulla erotettuna<input id="manualPunches" type="text" placeholder="76(239),88(100),92(400)"></label>
+        <button id="manualSendButton" disabled>Lähetä käsin</button>
+      </div>
+      <p id="manualStatus" class="status">Anna Emit-numero ja leimat, esim. 76(239),88(100),92(400). Vaatii avatun sarjaportin.</p>
     </section>
   </main>
   <script src="app.js"></script>
